@@ -7,7 +7,7 @@
 #define WRITE(X, Y) (p->write((char*) X, Y, t))
 
 const int numHouseholds = 100;
-const int numFirms = 50;
+const int numFirms = 100;
 const char* sectors[] = { "Agriculture", "Energy", "Housing", "Transport", "Industry", "Technology" };
 
 struct Household {
