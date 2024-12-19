@@ -1,0 +1,3866 @@
+#include "fun_head.h"
+#include <iostream>
+#include <string>
+#include <cstdlib>
+#include <ctime>
+
+#define WRITE(X, Y) (p->write((char*) X, Y, t))
+
+const int numHouseholds = 100;
+const int numFirms = 50;
+const char* sectors[] = { "Agriculture", "Energy", "Housing", "Transport", "Industry", "Technology" };
+
+struct Household {
+    int status;
+    int assignedSector;
+    double salary = 0.0;
+};
+
+struct Firm {
+    std::string sector;
+    double salaryShareBrown = 0;
+    double salaryShareGreen = 0;
+    double salaryBrown = 1000;
+    double salaryGreen = 1200;
+};
+
+Household households[numHouseholds];
+Firm firms[numFirms];
+
+class Model {
+public:
+    void initializeFirms() {
+        for (int i = 0; i < numFirms; ++i) {
+            firms[i].sector = sectors[i % 6];
+        }
+    }
+
+    void initializeHouseholds() {
+        for (int i = 0; i < numHouseholds; ++i) {
+            float randValue = static_cast<float>(rand()) / RAND_MAX;
+
+            if (randValue < 0.3) {
+                households[i].status = 0;
+                households[i].salary = 0.0;
+            } else if (randValue < 0.7) {
+                households[i].status = 1;
+                int firmIndex = rand() % numFirms;
+                households[i].salary = firms[firmIndex].salaryBrown;
+                households[i].assignedSector = rand() % 6;
+            } else {
+                households[i].status = 2;
+                int firmIndex = rand() % numFirms;
+                households[i].salary = firms[firmIndex].salaryGreen;
+                households[i].assignedSector = rand() % 6;
+            }
+        }
+    }
+
+    void displayHouseholds() {
+        for (int i = 0; i < 10; ++i) {
+            std::cout << "Household " << i << " | Status: " << households[i].status
+                      << " | Sector Assigned: " << households[i].assignedSector
+                      << " | Salary: " << households[i].salary << std::endl;
+        }
+    }
+};
+
+Model model;
+
+MODELBEGIN
+
+
+
+
+/*CYCLE D'ACHAT DES CLIENTS*/ 
+
+
+
+EQUATION("HouseholdConsumption")
+/*
+Détermination de la consommation d'un ménage en fonction de son statut d'emploi.
+Les statuts sont représentés par des valeurs numériques :
+0 = Unemployed, 1 = EmployedBrown, 2 = EmployedGreen.
+*/
+
+// Récupération des variables pertinentes
+v[0] = V("UnemploymentBenefit");  // Allocation chômage fixe
+v[1] = V("PropensityToConsume");  // Propension marginale à consommer
+v[2] = V("BaseConsumption");      // Niveau de consommation minimum
+v[3] = V("Status");               // Statut du ménage : 0, 1 ou 2
+v[4] = V("Salary");               // Salaire individuel du ménage (0 si chômage)
+
+// Détermination de la consommation en fonction du statut
+switch (static_cast<int>(v[3])) { 
+    case 0: // Unemployed
+        v[5] = v[0];  // Allocation chômage
+        break;
+    case 1: // EmployedBrown
+    case 2: // EmployedGreen
+        v[5] = v[2] + v[1] * v[4];  // Consommation basée sur le salaire
+        break;
+    default:
+        v[5] = 0;  // Sécurité : consommation nulle pour un statut inconnu
+}
+
+RESULT(v[5])
+
+
+EQUATION("Yfin")
+/*
+Financial income (interest on deposits)
+*/
+
+v[0] = V("IntDep");
+v[1] = VL("S", 1);
+
+v[2] = v[0]*v[1];
+
+RESULT( v[2])
+
+
+EQUATION("Dep")
+/*
+Deposits
+*/
+
+v[0] = V("Ydisp");
+v[1] = V("ValDesCons");
+v[2] = VL("Dep", 1);
+
+v[3] = v[2] + (v[0] - v[1]);
+
+RESULT( v[3])
+
+
+
+/*
+EQUATION("ValDesCons")
+
+
+v[0]= V("Ydisp");
+v[1]= V("alpha0");
+v[2]= V("alpha1");
+v[3]= VL("S", 1);
+
+if(V("IrreducibleCons")>(V("Ydisp")+VL("S", 1)))
+{
+v[4] = V("IrreducibleCons"); // Consumption rationing
+}
+else
+{
+v[4] = v[1]*v[0]+v[2]*v[3];
+}
+RESULT(v[4])
+*/
+
+
+EQUATION("ConsAg")
+/*
+Monetary value of irreducible food consumption
+*/
+
+v[0] = VL("ConsAg", 1);
+v[1] = V("PriceAg");
+v[2] = VL("PriceAg", 1);
+
+v[3] = v[0]*(1+(v[1]-v[2]));
+
+RESULT( v[3])
+
+
+EQUATION("ConsEner")
+/*
+Monetary value of irreducible energy consumption
+*/
+
+v[0] = VL("ConsEner", 1);
+v[1] = V("PriceEner");
+v[2] = VL("PriceEner", 1);
+
+v[3] = v[0]*(1+(v[1]-v[2]));
+
+RESULT( v[3])
+
+
+EQUATION("ConsHous")
+/*
+Monetary value of irreducible housing consumption
+*/
+
+v[0] = VL("ConsHous", 1);
+v[1] = V("PriceHous");
+v[2] = VL("PriceHous", 1);
+
+v[3] = v[0]*(1+(v[1]-v[2]));
+
+RESULT( v[3])
+
+
+EQUATION("ConsTrans")
+/*
+Monetary value of irreducible transportation consumption
+*/
+
+v[0] = VL("ConsTrans", 1);
+v[1] = V("PriceTrans");
+v[2] = VL("PriceTrans", 1);
+
+v[3] = v[0]*(1+(v[1]-v[2]));
+
+RESULT( v[3])
+
+
+EQUATION("IrreducibleCons")
+/*
+Irreducible consumption.
+*/
+
+v[0] = V("ConsAg");
+v[1] = V("ConsEner");
+v[2] = V("ConsHous");
+v[3] = V("ConsTrans");
+
+v[4] = v[0] + v[1] + v[2] + v[3];
+
+RESULT(v[4])
+
+
+EQUATION("SuppCons")
+/*
+Consumption supplementary to irreducible consumption
+*/
+
+v[0] = V("ValDesCons");
+v[1] = V("IrreducibleCons");
+
+v[2] = v[0] - v[1];
+
+RESULT( v[2])
+
+
+EQUATION("SuppConsAg")
+/*
+Comment
+*/
+
+v[0] = V("AgPref");
+v[1] = V("SuppCons");
+
+v[2] = v[0] * v[1];
+
+RESULT( v[2])
+
+EQUATION("SuppConsEner")
+/*
+Comment
+*/
+
+v[0] = V("EnerPref");
+v[1] = V("SuppCons");
+
+v[2] = v[0]*v[1];
+
+RESULT( v[2])
+
+EQUATION("SuppConsHous")
+/*
+Comment
+*/
+
+v[0] = V("HousPref");
+v[1] = V("SuppCons");
+
+v[2] = v[0]*v[1];
+
+RESULT( v[2])
+
+EQUATION("SuppConsTrans")
+/*
+Comment
+*/
+
+v[0] = V("TransPref");
+v[1] = V("SuppCons");
+
+v[2] = v[0]*v[1];
+
+RESULT( v[2])
+
+EQUATION("SuppConsInd")
+/*
+Comment
+*/
+
+v[0] = V("IndPref");
+v[1] = V("SuppCons");
+
+v[2] = v[0]*v[1];
+
+RESULT( v[2])
+
+EQUATION("SuppConsTC")
+/*
+Comment
+*/
+
+v[0] = V("TCPref");
+v[1] = V("SuppCons");
+
+v[2] = v[0]*v[1];
+
+RESULT( v[2])
+
+EQUATION("ConsAgTot")
+/*
+Comment
+*/
+
+v[0] = V("ConsAg");
+v[1] = V("SuppConsAg");
+
+v[2] = v[0] + v[1];
+
+RESULT( v[2])
+
+EQUATION("ConsEnerTot")
+/*
+Comment
+*/
+
+v[0] = V("ConsEner");
+v[1] = V("SuppConsEner");
+
+v[2] = v[0] + v[1];
+
+RESULT( v[2])
+
+EQUATION("ConsHousTot")
+/*
+Comment
+*/
+
+v[0] = V("ConsHous");
+v[1] = V("SuppConsHous");
+
+v[2] = v[0] + v[1];
+
+RESULT( v[2])
+
+EQUATION("ConsTransTot")
+/*
+Comment
+*/
+
+v[0] = V("ConsTrans");
+v[1] = V("SuppConsTrans");
+
+v[2] = v[0] + v[1];
+
+RESULT( v[2])
+
+EQUATION("ConsIndTot")
+/*
+Comment
+*/
+
+v[0] = V("ConsInd");
+v[1] = V("SuppConsInd");
+
+v[2] = v[0] + v[1];
+
+RESULT( v[2])
+
+EQUATION("ConsTCTot")
+/*
+Comment
+*/
+
+v[0] = V("ConsTC");
+v[1] = V("SuppConsTC");
+
+v[2] = v[0] + v[1];
+
+RESULT( v[2])
+
+/*
+
+EQUATION("ConsPref")
+
+
+
+v[40]=VS(c,"AgPref");
+v[41]=VS(c,"EnerPref");
+v[42]=VS(c,"HousPref");
+v[43]=VS(c,"TransPref");
+v[44]=VS(c,"IndPref");
+v[45]=VS(c,"TCPref");
+
+v[46]=v[40]+v[41]+v[42]+v[43]+v[44]+v[45];
+v[0]=v[40]/v[46];
+v[1]=v[41]/v[46];
+v[2]=v[42]/v[46];
+v[3]=v[43]/v[46];
+v[4]=v[44]/v[46];
+v[5]=v[45]/v[46];
+
+RESULT( )
+
+Comment
+*/
+
+/*
+Once the monetary value of consumption is determined, we can identify how households are going to allocate money between sectors, firms, and goods.
+*/
+
+
+
+
+
+
+EQUATION("ProdUsed") 
+/*
+D?termine le produit utilis? par le client
+*/
+
+V("InitTrade"); 
+v[0]=VL("ProdUsed",1);
+v[2]=V("Rebuy");
+  if(v[2]==1)
+  	v[3]=v[0];// garde le meme produit
+  else
+  	v[3]=V("Purchase"); //achat d'un nouveau produit
+  
+RESULT(v[3])
+
+
+
+FUNCTION("Rebuy")
+/*
+Determine si le client garde le meme fournisseur : 1=oui, 0=non
+*/
+if(t==1)// pour la 1ere periode : pas de rachat possible
+{
+END_EQUATION(0);
+}
+
+v[30]=VS(c,"a");
+v[31]=VS(c,"b");
+v[32]=VS(c,"c");
+v[33]=VS(c,"d");
+v[34]=v[30]+v[31]+v[32]+v[33];
+v[0]=v[30]/v[34];// pour que la somme des pref fasse 1
+v[1]=v[31]/v[34];
+v[2]=v[32]/v[34];
+v[3]=v[33]/v[34];
+
+v[4]=VLS(c,"ProdUsed",1);
+v[5]=VS(c,"Product_Type");
+v[22]=VS(c,"Alpha_Regu_Customers");
+
+
+if(v[4]==0)//si le client n'a pas de produit : pas de rachat possible
+END_EQUATION(0);
+
+
+CYCLE(cur, "Firm")// verifie que la firme n'a pas disparu
+ {
+  v[20]=VS(cur,"IdFirm");
+  if(v[4]==v[20])
+  {
+  	v[21]=VS(cur,"Dead");
+  	if(v[21]==1)
+  	END_EQUATION(0);
+  }
+ }
+
+
+v[12]=0;// le resultat fait 0 par defaut
+
+CYCLE(cur, "Firm")
+{
+  v[6]=VS(cur,"IdFirm");
+
+  if(v[6]==v[4])
+  {
+  CYCLES(cur, cur1, "Product")
+   {
+     v[7]=VS(cur1,"IdProduct");
+
+      if(v[7]==v[5])
+    {
+    	v[15]=VS(cur1,"IsAdopted");
+    
+    	if(v[15]==0)// si le produit n'est plus commercialise
+    	{
+    	END_EQUATION(0);
+    	}
+    	
+    	v[8]=UNIFORM(0,1);
+    		
+    	if(v[8]<=v[0])//on cherche la dimension a retenir en fonction des preferences du client
+    	{
+    			v[9]=VL("Max_X",1);
+    			v[10]=VS(cur1,"X");
+    			v[11]=UNIFORM(0.8,1.2);//terme d'erreur
+    			if(v[10]>=(v[9]*v[11]))//garde le meme fournisseur
+    			{
+    				v[27]=VS(cur,"Portfolio");
+    				if(v[27]==0)//si la firme n'a pas la technologie 2 dans son portefeuille
+    				{
+    					v[23]=V("Sunset_Date");
+    					v[24]=V("Revision_Period");
+    					v[25]=v[22]*t/(v[23]+v[24]);//proba de defection
+    					v[26]=UNIFORM(0,1);
+    
+    					if(v[26]<=v[25])//si tirage de defection reussi
+    					END_EQUATION(0);
+    				}
+    			
+       	v[12]=1;// il garde le meme produit
+    				INCRS(cur,"Sales",1);// La firme enregistre une vente en plus 
+     			INCRS(cur1,"Sales_Prod",1);// augmente les ventes du produit de 1
+    			}
+    	}
+    
+    	if(v[8]>v[0]&&v[8]<=(v[0]+v[1]))
+    	{
+    		v[9]=VL("Min_Price",1);
+    		v[10]=VLS(cur1,"Price",1);
+    		v[11]=UNIFORM(0.8,1.2);//terme d'erreur
+    		if(v[10]<=(v[9]*v[11]))//garde le meme fournisseur
+    			{
+    				v[27]=VS(cur,"Portfolio");
+    				if(v[27]==0)//si la firme n'a pas la technologie 2 dans son portefeuille
+    				{
+    					v[23]=V("Sunset_Date");
+    					v[24]=V("Revision_Period");
+    					v[25]=v[22]*t/(v[23]+v[24]);//proba de defection
+    					v[26]=UNIFORM(0,1);
+    
+    					if(v[26]<=v[25])//si tirage de defection reussi
+    					END_EQUATION(0);
+    				}
+    			
+       	v[12]=1;// il garde le meme produit
+    				INCRS(cur,"Sales",1);// La firme enregistre une vente en plus (REPLACE PAR ConsAg/Price)
+     			INCRS(cur1,"Sales_Prod",1);// augmente les ventes du produit de 1
+    			}
+    	}
+    
+    	if(v[8]>(v[0]+v[1])&&v[8]<=(v[0]+v[1]+v[2]))
+    	{
+    		v[9]=VL("Min_Tox",1);
+    		v[10]=VS(cur1,"Tox");
+    		v[11]=UNIFORM(0.8,1.2);//terme d'erreur
+    		if(v[10]<=(v[9]*v[11]))//garde le meme fournisseur
+    			{
+    				v[27]=VS(cur,"Portfolio");
+    				if(v[27]==0)//si la firme n'a pas la technologie 2 dans son portefeuille
+    				{
+    					v[23]=V("Sunset_Date");
+    					v[24]=V("Revision_Period");
+    					v[25]=v[22]*t/(v[23]+v[24]);//proba de defection
+    					v[26]=UNIFORM(0,1);
+    
+    					if(v[26]<=v[25])//si tirage de defection reussi
+    					END_EQUATION(0);
+    				}
+    			
+       	v[12]=1;// il garde le meme produit
+    				INCRS(cur,"Sales",1);// La firme enregistre une vente en plus 
+     			INCRS(cur1,"Sales_Prod",1);// augmente les ventes du produit de 1
+    			}
+    	}
+    
+    	if(v[8]>(v[0]+v[1]+v[2]))
+    	{
+    			v[9]=VL("Min_Bio",1);
+    			v[10]=VS(cur1,"Bio");
+    			v[11]=UNIFORM(0.8,1.2);//terme d'erreur
+    			if(v[10]<=(v[9]*v[11]))//garde le meme fournisseur
+    			{
+    				v[27]=VS(cur,"Portfolio");
+    				if(v[27]==0)//si la firme n'a pas la technologie 2 dans son portefeuille
+    				{
+    					v[23]=V("Sunset_Date");
+    					v[24]=V("Revision_Period");
+    					v[25]=v[22]*t/(v[23]+v[24]);//proba de defection
+    					v[26]=UNIFORM(0,1);
+    
+    					if(v[26]<=v[25])//si tirage de defection reussi
+    					END_EQUATION(0);
+    				}
+    			
+       	v[12]=1;// il garde le meme produit
+    				INCRS(cur,"Sales",1);// La firme enregistre une vente en plus 
+     			INCRS(cur1,"Sales_Prod",1);// augmente les ventes du produit de 1
+    			}
+    	}
+   }
+  }
+ }
+}   
+    
+RESULT( v[12])
+
+
+
+
+
+FUNCTION("Purchase")
+/*
+Fonction correspondant au processus d'achat du client
+*/
+v[40]=VS(c,"a");
+v[41]=VS(c,"b");
+v[42]=VS(c,"c");
+v[43]=VS(c,"d");
+v[44]=v[40]+v[41]+v[42]+v[43];
+v[0]=v[40]/v[44];// pour que la somme des pref fasse 1
+v[1]=v[41]/v[44];
+v[2]=v[42]/v[44];
+v[3]=v[43]/v[44];
+v[4]=VS(c,"e");
+v[30]=VS(c,"Reservation_Price");
+v[31]=VS(c,"Reservation_X");
+v[34]=VS(c,"Alpha_Regu_Customers");
+v[22]=V("A");//pour X
+v[23]=V("B");//pour Price
+v[24]=V("C");//pour Tox
+v[25]=V("D");//pour Bio
+v[35]=V("Sunset_Date");
+v[36]=V("Revision_Period");
+
+v[18]=UNIFORM(0,0.1);//alea pour eviter pb de MS=0 => U=0
+
+v[27]=0;
+
+v[8]=UNIFORM(0,1);
+
+if(v[8]<=v[0])//on cherche la dimension a retenir en fonction des preferences du client
+{
+CYCLE(cur, "Product_Purchase")// calcul l'utilite de chaque produit en retenant que X
+ {
+  v[5]=VS(cur,"Purchase_X");
+	v[6]=VS(cur,"Purchase_Price");
+  v[9]=VS(cur,"Purchase_MS");
+  v[17]=VS(cur,"Purchase_IsAdopted");
+  v[33]=VS(cur,"Purchase_Portfolio");
+  v[50]=V("Error");//pour terme d'erreur !!!!!!
+  v[51]=UNIFORM(1-v[50],1+v[50]);//terme d'erreur !!!!!
+
+ 
+	if(v[6]>v[30]||v[5]<v[31])//si prix sup au prix de reserve et la perf X inf au seuil min
+	v[10]=0;// ut = 0
+ 	else
+ 	{
+ 		if(v[33]==0)//si la firme n'a pas la technologie 2 dans son portefeuille
+ 		v[10]=(1-v[34]*t/(v[35]+v[36]))*(v[17]*(v[5]*v[51]-v[22])*pow(v[9]+v[18],v[4]));//!!!!
+ 		else
+  		v[10]=v[17]*(v[5]*v[51]-v[22])*pow(v[9]+v[18],v[4]);//!!!!!
+  }
+  WRITES(cur,"Utility",v[10]);
+	v[27]=v[27]+v[10];
+ }
+}
+
+if(v[8]>v[0]&&v[8]<=(v[0]+v[1]))
+{
+CYCLE(cur, "Product_Purchase")// calcul l'utilite de chaque produit en retenant que Price
+ {
+  v[5]=VS(cur,"Purchase_X");
+	v[6]=VS(cur,"Purchase_Price");
+  v[9]=VS(cur,"Purchase_MS");
+  v[17]=VS(cur,"Purchase_IsAdopted");
+  v[33]=VS(cur,"Purchase_Portfolio");
+  v[50]=V("Error");//pour terme d'erreur !!!!!!
+  v[51]=UNIFORM(1-v[50],1+v[50]);//terme d'erreur !!!!!
+
+ 
+	if(v[6]>v[30]||v[5]<v[31])//si prix sup au prix de reserve et la perf X inf au seuil min
+	v[10]=0;// ut = 0
+ 	else
+ 	{
+ 		if(v[33]==0)//si la firme n'a pas la technologie 2 dans son portefeuille
+ 		v[10]=(1-v[34]*t/(v[35]+v[36]))*(v[17]*(v[23]-v[6]*v[51])*pow(v[9]+v[18],v[4]));//!!!!!
+ 		else
+  		v[10]=v[17]*(v[23]-v[6]*v[51])*pow(v[9]+v[18],v[4]);//!!!!!
+  }
+  WRITES(cur,"Utility",v[10]);
+	v[27]=v[27]+v[10];
+ }
+}
+
+if(v[8]>(v[0]+v[1])&&v[8]<=(v[0]+v[1]+v[2]))
+{
+CYCLE(cur, "Product_Purchase")// calcul l'utilite de chaque produit en retenant que Tox
+ {
+  v[5]=VS(cur,"Purchase_X");
+	v[6]=VS(cur,"Purchase_Price");
+	v[7]=VS(cur,"Purchase_Tox");
+  v[9]=VS(cur,"Purchase_MS");
+  v[17]=VS(cur,"Purchase_IsAdopted");
+  v[33]=VS(cur,"Purchase_Portfolio");
+  v[50]=V("Error");//pour terme d'erreur !!!!!!
+  v[51]=UNIFORM(1-v[50],1+v[50]);//terme d'erreur !!!!!
+
+ 
+	if(v[6]>v[30]||v[5]<v[31])//si prix sup au prix de reserve et la perf X inf au seuil min
+	v[10]=0;// ut = 0
+ 	else
+ 	{
+ 		if(v[33]==0)//si la firme n'a pas la technologie 2 dans son portefeuille
+ 		v[10]=(1-v[34]*t/(v[35]+v[36]))*(v[17]*(v[24]-v[7]*v[51])*pow(v[9]+v[18],v[4]));//!!!!!
+ 		else
+  		v[10]=v[17]*(v[24]-v[7]*v[51])*pow(v[9]+v[18],v[4]);//!!!!!!
+  }
+  WRITES(cur,"Utility",v[10]);
+	v[27]=v[27]+v[10];
+ }
+}
+
+if(v[8]>(v[0]+v[1]+v[2]))
+{
+CYCLE(cur, "Product_Purchase")// calcul l'utilite de chaque produit en retenant que Bio
+ {
+  v[5]=VS(cur,"Purchase_X");
+	v[6]=VS(cur,"Purchase_Price");
+	v[7]=VS(cur,"Purchase_Bio");
+  v[9]=VS(cur,"Purchase_MS");
+  v[17]=VS(cur,"Purchase_IsAdopted");
+  v[33]=VS(cur,"Purchase_Portfolio");
+  v[50]=V("Error");//pour terme d'erreur !!!!!!
+  v[51]=UNIFORM(1-v[50],1+v[50]);//terme d'erreur !!!!!
+
+ 
+	if(v[6]>v[30]||v[5]<v[31])//si prix sup au prix de reserve et la perf X inf au seuil min
+	v[10]=0;// ut = 0
+ 	else
+ 	{
+ 		if(v[33]==0)//si la firme n'a pas la technologie 2 dans son portefeuille
+ 		v[10]=(1-v[34]*t/(v[35]+v[36]))*(v[17]*(v[25]-v[7]*v[51])*pow(v[9]+v[18],v[4]));//!!!!!!
+ 		else
+  		v[10]=v[17]*(v[25]-v[7]*v[51])*pow(v[9]+v[18],v[4]);//!!!!!!
+  }
+  WRITES(cur,"Utility",v[10]);
+	v[27]=v[27]+v[10];
+ }
+}
+
+
+if(v[27]==0)//si les utilites sont toutes nulles
+{
+	WRITES(c,"Product_Type",0);// inscrit le type de produit achete dans l'objet customer
+	END_EQUATION(0);
+}
+
+cur=RNDDRAW("Product_Purchase","Utility");//choisit le produit avec tirage aleatoire proportionnel aux utilites
+
+v[11]=VS(cur,"IdFirm_Purchase");// recupere l'identifiant de la firme choisie
+v[12]=VS(cur,"IdProduct_Purchase");// recupere le type de produit choisi
+WRITES(c,"Product_Type",v[12]);// inscrit le type de produit achete dans l'objet customer
+
+
+CYCLE(cur1, "Firm")
+{
+
+	v[13]=VS(cur1,"IdFirm");
+
+	if(v[13]==v[11])//repere la firme selectionnee
+ 	{
+ 		INCRS(cur1,"Sales",1);// augmente les vente de la firme selectionnee d'une unite
+  	CYCLES(cur1, cur2, "Product")
+   	{
+   		v[14]=VS(cur2,"IdProduct");
+  			if(v[14]==v[12])
+   			{
+   				INCRS(cur2,"Sales_Prod",1);// augmente les ventes du produit de 1
+    				
+   			}
+   		}
+ 	}
+}
+
+
+RESULT(v[11] )// retourne l'identifiant de la firme selectionnee
+
+
+
+
+/*
+LABOUR MARKET
+*/
+
+
+
+
+
+
+EQUATION("GreenEmployees")
+/*
+Part des emplois verts dans la firme :
+Emplois verts = Demande totale de travail * Part verte
+La part verte dépend des investissements verts et d'une norme sectorielle.
+*/
+v[0] = V("LaborDemand");           // Demande totale de travail
+v[1] = V("GreenInvestment");       // Investissement vert de la firme
+v[2] = V("SectorGreenShare");      // Norme sectorielle de part verte
+v[3] = v[1] / (v[1] + 1);          // Transformation de l'investissement vert en proportion
+v[4] = max(v[3], v[2]);            // La part verte est au moins la norme sectorielle
+RESULT(v[0] * v[4])                // Emplois verts
+
+
+
+
+EQUATION("BrownEmployees")
+/*
+Allocation des employés bruns
+*/
+v[0] = V("LaborDemand");            // Demande totale de travail
+v[1] = V("GreenEmployees");         // Employés verts
+RESULT(v[0] - v[1])                 // Employés bruns = Demande totale - Employés verts
+
+
+
+EQUATION("SectorLaborDemand")
+/*
+Demande totale de travail dans le secteur
+*/
+v[0] = 0;
+CYCLE(cur, "Firm")
+{
+    v[0] += VS(cur, "LaborDemand");  // Somme des demandes de travail des entreprises
+}
+RESULT(v[0])
+
+
+EQUATION("SectorGreenEmployees")
+/*
+Somme des emplois verts pour toutes les firmes d'un secteur.
+*/
+v[0] = 0;
+CYCLE(cur, "Firm")           // Parcours de chaque firme dans le secteur
+  v[0] += VS(cur, "GreenEmployees");
+RESULT(v[0])
+
+
+
+
+EQUATION("SectorBrownEmployees")
+/*
+Somme des emplois bruns pour toutes les firmes d'un secteur.
+*/
+v[0] = 0;
+CYCLE(cur, "Firm")           // Parcours de chaque firme dans le secteur
+  v[0] += VS(cur, "BrownEmployees");
+RESULT(v[0])
+
+
+
+EQUATION("GreenTransition")
+/*
+Reconversion des emplois bruns vers verts :
+Les employés bruns sont reconvertis progressivement selon un taux de transition.
+*/
+v[0] = V("BrownEmployees");      // Employés bruns actuels
+v[1] = V("GreenTransitionRate"); // Taux de reconversion
+v[2] = V("GreenEmployees");      // Employés verts actuels
+v[3] = v[1] * v[0];              // Employés bruns convertis en verts
+WRITE("BrownEmployees", v[0] - v[3]);  // Mise à jour des bruns
+WRITE("GreenEmployees", v[2] + v[3]);  // Mise à jour des verts
+RESULT(1)  // Processus terminé
+
+
+EQUATION("LaborDemand")
+/*
+Demande de travail par secteur pour chaque industrie, gestion des transitions entre emplois verts et bruns
+avec prise en compte des coûts d'ajustement.
+*/
+v[0] = V((std::string(sectors[i]) + "_Production").c_str());  // Production totale requise par secteur  
+v[1] = V((std::string(sectors[i]) + "_Productivity").c_str());  // Productivité moyenne des travailleurs  
+v[2] = V((std::string(sectors[i]) + "_ShareGreenDemand").c_str());  // Part de demande d'emplois verts  
+v[3] = V((std::string(sectors[i]) + "_ShareBrownDemand").c_str());  // Part de demande d'emplois bruns  
+v[4] = V("AdjustmentCostFactor");  // Coût des transitions verts-bruns  
+
+// Nombre d'emplois verts et bruns précédents dans le secteur
+v[5] = VL((std::string(sectors[i]) + "_GreenLabor").c_str(), 1);  
+v[6] = VL((std::string(sectors[i]) + "_BrownLabor").c_str(), 1);  
+
+// Besoins en travail total pour le secteur
+v[7] = v[0] / v[1];  
+
+// Demande d'emplois verts et bruns selon leurs parts respectives
+v[8] = v[2] * v[7];  // Demande d'emplois verts  
+v[9] = v[3] * v[7];  // Demande d'emplois bruns  
+
+// Ajustement des besoins en travail vert
+v[10] = v[8] - v[5];
+
+if (v[10] > 0) {
+    // Si la demande d'emplois verts dépasse l'offre existante, reconversion des bruns en verts
+    v[11] = (v[10] < v[6]) ? v[10] : v[6];
+    v[12] = v[10] - v[11];  // Nouveaux recrutements verts
+    v[13] = v[11] * v[4];  // Coût de reconversion des transitions verts-bruns
+} else {
+    v[11] = 0;
+    v[12] = 0;
+    v[13] = 0;
+}
+
+// Ajustement des emplois bruns
+v[14] = v[9] - v[6];
+
+if (v[14] < 0) {
+    v[15] = -v[14];  // Licenciements bruns (valeur absolue)
+} else {
+    v[15] = 0;
+}
+
+// Mise à jour des valeurs des transitions
+WRITE((std::string(sectors[i]) + "_GreenLabor").c_str(), v[5] + v[11] + v[12]);
+WRITE((std::string(sectors[i]) + "_BrownLabor").c_str(), v[6] + v[14]);
+
+RESULT(v[13])  // Retourne les coûts des transitions verts-bruns
+
+
+
+
+
+EQUATION("LaborDemandMicro")
+/*
+Demande de travail par firme, gestion des transitions entre emplois verts et bruns
+avec prise en compte des coûts d'ajustement, à l'échelle micro.
+*/
+
+// Initialisation
+v[0] = V((std::string(sectors[i]) + "_FirmCount").c_str());  // Nombre de firmes dans le secteur
+v[1] = 0;  // Coût total des ajustements pour le secteur
+
+// Boucle sur les firmes
+for (v[2] = 0; v[2] < v[0]; ++v[2]) {
+    // Construction de l'identifiant de la firme
+    std::string firmKey = std::string(sectors[i]) + "_Firm" + std::to_string((int)v[2]);
+
+    // Variables spécifiques à la firme
+    v[3] = V((firmKey + "_Production").c_str());      // Production
+    v[4] = V((firmKey + "_Productivity").c_str());    // Productivité
+    v[5] = V((firmKey + "_ShareGreenDemand").c_str()); // Part de demande verte
+    v[6] = V((firmKey + "_ShareBrownDemand").c_str()); // Part de demande brune
+    v[7] = V("AdjustmentCostFactor");                 // Coût de reconversion
+
+    // Variables de travail de la période précédente
+    v[8] = VL((firmKey + "_GreenLabor").c_str(), 1);  // Travail vert précédent
+    v[9] = VL((firmKey + "_BrownLabor").c_str(), 1);  // Travail brun précédent
+
+    // Calcul des besoins en travail
+    v[10] = v[3] / v[4];         // Travail total requis
+    v[11] = v[5] * v[10];        // Demande d'emplois verts
+    v[12] = v[6] * v[10];        // Demande d'emplois bruns
+
+    // Ajustement du travail vert
+    v[13] = v[11] - v[8];        // Différence entre la demande et l'offre existante (travail vert)
+    if (v[13] > 0) {
+        v[14] = (v[13] < v[9]) ? v[13] : v[9];  // Reconversion des bruns en verts
+        v[15] = v[13] - v[14];  // Recrutements supplémentaires verts
+        v[16] = v[14] * v[7];   // Coût de reconversion
+    } else {
+        v[14] = 0;
+        v[15] = 0;
+        v[16] = 0;
+    }
+
+    // Ajustement du travail brun
+    v[17] = v[12] - v[9];        // Différence pour le travail brun
+    if (v[17] < 0) {
+        v[18] = -v[17];          // Licenciements bruns
+    } else {
+        v[18] = 0;
+    }
+
+    // Mise à jour des valeurs pour la firme
+    WRITE((firmKey + "_GreenLabor").c_str(), v[8] + v[14] + v[15]);
+    WRITE((firmKey + "_BrownLabor").c_str(), v[9] + v[17]);
+
+    // Accumulation des coûts au niveau sectoriel
+    v[1] += v[16];
+}
+
+// Résultat : coût total des ajustements au niveau du secteur
+RESULT(v[1]);
+
+
+
+
+
+EQUATION("LaborSupply")
+/*
+Offre de travail des ménages en prenant en compte les transitions individuelles, les coûts et la mobilité.
+*/
+
+
+v[0]  = V((std::string(sectors[i]) + "_WageGreen").c_str());  // Salaire pour les emplois verts dans ce secteur  
+v[1]  = V((std::string(sectors[i]) + "_WageBrown").c_str());  // Salaire pour les emplois bruns dans ce secteur  
+v[2]  = V("RequalificationCost");                // Coût personnel pour la reconversion des travailleurs  
+v[3]  = V("MobilityFactor");                     // Influence des décisions de mobilité  
+v[4]  = V("UnemploymentRate");                   // Taux de chômage global  
+v[5]  = V((std::string(sectors[i]) + "_GreenLaborDemand").c_str());  // Demande d'emplois verts  
+v[6]  = V((std::string(sectors[i]) + "_BrownLaborDemand").c_str());  // Demande d'emplois bruns  
+v[7]  = V("WorkerTransitionRate");               // Taux de transition des travailleurs  
+v[8]  = V("FrictionalUnemployment");             // Chômage frictionnel  
+v[9]  = V("PolicySubsidy");                     // Subvention politique  
+
+  
+  v[10] = (v[0] - v[1] - v[2] + v[9] > 0) ? v[0] - v[1] - v[2] + v[9] : 0;
+	v[11] = ( (v[1] - v[0] - v[2]) > 0 ? (v[1] - v[0] - v[2]) : 0 ) * v[6] * v[7];
+
+  v[12] = v[10] * v[8];
+  v[13] = v[11] * v[8];
+
+WRITE((std::string(sectors[i]) + "_OfferedGreenLabor").c_str(), v[10] - v[12]);
+WRITE((std::string(sectors[i]) + "_OfferedBrownLabor").c_str(), v[11] - v[13]);
+WRITE((std::string(sectors[i]) + "_InvoluntaryUnemployment").c_str(), v[4] + v[8]);
+
+
+RESULT(v[10] + v[11])
+
+
+EQUATION("LaborSupplyMicro")
+/*
+Offre de travail des ménages, microéconomique, avec prise en compte des coûts et préférences individuels.
+*/
+
+v[0] = V((std::string(sectors[i]) + "_WageGreen").c_str());  // Salaire pour les emplois verts dans ce secteur
+v[1] = V((std::string(sectors[i]) + "_WageBrown").c_str());  // Salaire pour les emplois bruns dans ce secteur
+v[2] = V("RequalificationCost");                // Coût personnel pour la reconversion
+v[3] = V("MobilityFactor");                     // Mobilité individuelle
+v[4] = V("UnemploymentRate");                   // Taux de chômage global
+v[5] = V((std::string(sectors[i]) + "_GreenLaborDemand").c_str());  // Demande d'emplois verts
+v[6] = V((std::string(sectors[i]) + "_BrownLaborDemand").c_str());  // Demande d'emplois bruns
+v[7] = V("WorkerTransitionRate");               // Taux de transition
+v[8] = V("FrictionalUnemployment");             // Chômage frictionnel
+v[9] = V("PolicySubsidy");                     // Subvention politique
+
+// Boucle sur les ménages cherchant un emploi
+CYCLE(cur, "Households") {
+    v[10] = VLS(cur, "GreenJobPreference", 1);  // Préférence pour les emplois verts
+    v[11] = VLS(cur, "BrownJobPreference", 1);  // Préférence pour les emplois bruns
+    v[12] = VLS(cur, "TrainingCost", 1);        // Coût individuel de formation/requalification
+    v[13] = VLS(cur, "RelocationCost", 1);      // Coût de la mobilité géographique
+
+    // Calcul de l'attractivité des emplois verts
+    v[14] = v[0] - v[12] - v[2] + v[9] - v[13];
+    v[15] = (v[14] > 0) ? v[14] * v[10] : 0;  // Contribution potentielle aux emplois verts
+
+    // Calcul de l'attractivité des emplois bruns
+    v[16] = v[1] - v[12] - v[13];
+    v[17] = (v[16] > 0) ? v[16] * v[11] : 0;  // Contribution potentielle aux emplois bruns
+
+    // Mise à jour des décisions d'offre de travail
+    WRITE("OfferedGreenLaborMicro", v[15]);
+    WRITE("OfferedBrownLaborMicro", v[17]);
+}
+
+// Calcul des totaux agrégés par secteur
+v[18] = SUM("OfferedGreenLaborMicro");
+v[19] = SUM("OfferedBrownLaborMicro");
+
+WRITE((std::string(sectors[i]) + "_OfferedGreenLabor").c_str(), v[18]);
+WRITE((std::string(sectors[i]) + "_OfferedBrownLabor").c_str(), v[19]);
+
+// Calcul du chômage involontaire
+v[20] = v[4] + v[8] - (v[18] + v[19]);
+WRITE((std::string(sectors[i]) + "_InvoluntaryUnemployment").c_str(), v[20]);
+
+RESULT(v[18] + v[19])
+
+
+
+EQUATION("LaborMarketMatching")
+/*
+Équation qui relie l'offre et la demande de travail sur le marché, prenant en compte les coûts d'ajustement, les transitions, et le chômage involontaire.
+*/
+
+// Initialisation des paramètres sectoriels et individuels
+v[0] = V((std::string(sectors[i]) + "_WageGreen").c_str());  
+v[1] = V((std::string(sectors[i]) + "_WageBrown").c_str());  
+v[2] = V("RequalificationCost");                // Coût individuel pour la reconversion  
+v[3] = V("MobilityFactor");                     // Coût de mobilité individuelle  
+v[4] = V("UnemploymentRate");                   // Taux global de chômage  
+v[5] = V((std::string(sectors[i]) + "_GreenLaborDemand").c_str());  // Demande individuelle d'emplois verts  
+v[6] = V((std::string(sectors[i]) + "_BrownLaborDemand").c_str());  // Demande individuelle d'emplois bruns  
+v[7] = V("WorkerTransitionRate");               // Taux de transition des travailleurs  
+v[8] = V("FrictionalUnemployment");             // Chômage frictionnel  
+v[9] = V("PolicySubsidy");                     // Subvention politique
+
+// Boucle sur les ménages cherchant du travail
+CYCLE(cur, "Households") {
+    v[10] = VLS(cur, "GreenJobPreference", 1);  // Préférence pour les emplois verts  
+    v[11] = VLS(cur, "BrownJobPreference", 1);  // Préférence pour les emplois bruns  
+    v[12] = VLS(cur, "TrainingCost", 1);        // Coût individuel de reconversion  
+    v[13] = VLS(cur, "RelocationCost", 1);      // Coût de mobilité géographique  
+
+    // Calcul des attractivités des emplois verts et bruns
+    v[14] = v[0] - v[12] - v[2] + v[9] - v[13];  // Attractivité des emplois verts  
+    v[15] = (v[14] > 0) ? v[14] * v[10] : 0;    // Contribution des offres individuelles aux emplois verts  
+
+    v[16] = v[1] - v[12] - v[13];              // Attractivité des emplois bruns  
+    v[17] = (v[16] > 0) ? v[16] * v[11] : 0;   // Contribution des offres individuelles aux emplois bruns  
+
+    // Mise à jour des valeurs individuelles d'offre  
+    WRITE("OfferedGreenLaborMicro", v[15]);
+    WRITE("OfferedBrownLaborMicro", v[17]);
+}
+
+// Agrégation des offres individuelles des ménages
+v[18] = SUM("OfferedGreenLaborMicro");        // Total des offres individuelles pour le travail vert  
+v[19] = SUM("OfferedBrownLaborMicro");        // Total des offres individuelles pour le travail brun  
+
+// Agrégation des demandes des firmes
+v[20] = V((std::string(sectors[i]) + "_OfferedGreenLabor").c_str());  
+v[21] = V((std::string(sectors[i]) + "_OfferedBrownLabor").c_str());  
+
+// Calcul du chômage involontaire
+v[22] = v[4] + v[8] - (v[18] + v[19]);
+WRITE((std::string(sectors[i]) + "_InvoluntaryUnemployment").c_str(), v[22]);
+
+// Retour des résultats
+RESULT(v[18] + v[19]);
+
+
+
+
+
+
+
+// Équation des salaires individuels basée sur une part fixe des profits des firmes
+
+EQUATION("IndividualSalary")
+/*
+Chaque ménage reçoit un salaire en fonction de sa relation avec une firme spécifique.
+*/
+
+
+// Parcours des ménages pour associer avec leur firme employeur
+v[0] = V("households[i].employer_id");  
+
+// Identifier la firme du secteur j
+v[1] = V((std::string(sectors[j]) + "_Profit").c_str());  
+
+// Calcul de la rémunération en tant que 10% des profits
+v[2] = v[1] * 0.1;  
+
+// Mise à jour des salaires avec une conversion correcte de label
+WRITE((std::string("households[i]_Salary")).c_str(), v[2]); 
+
+RESULT(v[2])
+
+
+
+
+/*EQUATIONS RELATIVES AUX FIRMES*/
+
+
+
+
+
+EQUATION("Turnover")
+/*
+CA
+*/
+V("EndTrade");
+v[0]=0;
+
+CYCLE(cur, "Product")
+ {
+		v[1]=VLS(cur,"Price",1);
+		v[2]=VS(cur,"Sales_Prod");
+		v[0]=v[0]+v[1]*v[2];
+  }
+  
+RESULT( v[0])
+
+
+
+EQUATION("Share_Turn_P2")
+/*
+part du produit 2 ds le CA
+*/
+V("EndTrade");
+v[0]=V("Turnover");
+
+cur=SEARCH_CND("IdProduct",2);//cherche le produit 2 de la firme
+v[1]=VLS(cur,"Price",1);
+v[2]=VS(cur,"Sales_Prod");
+
+if(v[0]==0)
+v[3]=0;
+else
+v[3]=(v[1]*v[2])/v[0];
+
+RESULT( v[3])
+
+
+
+EQUATION("Adoption_Index_MS")
+/*
+indice pour decision d'adoption du produit 2 calcule sur MST2
+*/
+V("Budget");//on s'assure que les entrees et sorties ont eu lieu
+
+v[0]=V("ms_Product2");
+v[2]=V("Alpha_Regu");
+v[3]=V("Sunset_Date");
+v[6]=V("Revision_Period");
+
+
+v[5]=v[0]*(1+v[2]*t/(v[3]+v[6]));
+
+
+RESULT(v[5] )
+
+
+
+EQUATION("Adoption_Product2")
+/*
+determine si la firme adopte le produit 2 => portefeuille de technlogies/produits
+Porfolio: 1 si oui 0 si non
+*/
+
+V("EndTrade");
+v[10]=V("Portfolio");
+
+if(v[10]==0)//si le produit 2 n'est pas adopte
+{
+
+	v[0]=V("Adoption_Index_MS");
+	v[1]=V("Adoption_Threshold_MS");// seuil pour adoption sur MS
+	v[30]=V("K");//!!!!!!
+	v[31]=V("Adoption_Threshold_K");// seuil pour adoption sur K !!!!!
+
+	if(v[0]>v[1]&&v[30]>v[31])//si les deux indices depassent les seuils => adoption !!!!!
+	{
+		v[11]=V("Budget");
+		v[12]=V("Switching_Costs");
+		v[13]=v[11]-v[12];
+
+		if(v[13]>=0)//adopte si le budget est suffisant
+		{
+		WRITE("Portfolio",1);
+		WRITE("Switching_Period",t+1);//inscrit la periode +1 car paiement des switching costs sur le budget suivant
+		CYCLE(cur, "Product")
+ 			{
+  				v[2]=VS(cur,"IdProduct");
+  				if(v[2]==2)
+  				{
+  					WRITES(cur,"IsAdopted",1);
+  		
+  					v[20]=V("K");// procedure changee !!!!!!!!!!!!!!!!
+  					v[3]=V("Product2_Init_X");
+  					v[4]=V("Product2_Init_Eff");
+  					v[5]=V("Product2_Init_Tox");
+  					v[6]=V("Product2_Init_Bio");
+  					v[22]=VL("Absolute_maxX_P2",1);
+  					v[23]=VL("Absolute_maxEff_P2",1);
+  					v[24]=VL("Absolute_minTox_P2",1);
+  					v[25]=VL("Absolute_minBio_P2",1);
+  
+  					WRITES(cur,"X",v[3]+v[20]*(v[22]-v[3]));
+    					WRITES(cur,"Eff",v[4]+v[20]*(v[23]-v[4]));
+      					WRITES(cur,"Tox",v[5]-v[20]*(v[5]-v[24]));
+  					WRITES(cur,"Bio",v[6]-v[20]*(v[6]-v[25]));
+  
+  					}
+ 				}
+		}
+	}
+}
+
+RESULT( 1)
+
+
+EQUATION("First_adoption")
+/*
+retourne la periode a laquelle la techno 2 a ete adoptee pour la premiere fois
+*/
+V("EndTrade");
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+  v[0]=VS(cur,"Portfolio");
+  if(v[0]!=0)
+  {
+  	v[1]=t;
+  	PARAMETER;
+  }
+ }
+
+RESULT( v[1])
+
+
+
+
+EQUATION("Only_Product2")
+/*
+determine si la firme abandonne le produit 1
+OnlyProduct2 : 1 si oui, 0 sinon
+*/
+V("EndTrade");
+V("Adoption_Product2");
+v[3]=V("Portfolio");
+
+v[10]=V("NewFirm");
+if(v[10]==1)//si la firme est un nouvel entrant on quitte l'equation car le ROI n'est pas a jour
+END_EQUATION(1);
+
+if(v[3]==1)// si les deux produits sont adoptes
+{
+	v[0]=V("Share_Turn_P2");
+	v[1]=V("Threshold_Abandon");
+
+	v[4]=V("Regulation");
+	if(v[4]==0)
+	{
+		if(v[0]>v[1])//si la part du produit 2 dans le chiffre d'affaire est sup au seuil => on abandonne produit 1
+		{
+			WRITE("OnlyProduct2",1);
+			WRITE("Portfolio",2);//on inscrit 2 dans portfolio
+			cur=SEARCH_CND("IdProduct",1);//cherche le produit 1 de la firme
+			WRITES(cur,"IsAdopted",0);
+		}
+	}
+ 	else//si le produit 1 est interdit
+ 	{
+ 		WRITE("OnlyProduct2",1);
+		WRITE("Portfolio",2);//on inscrit 2 dans portfolio
+		cur=SEARCH_CND("IdProduct",1);//cherche le produit 1 de la firme
+		WRITES(cur,"IsAdopted",0);
+ 	}	
+ 
+}
+RESULT( 1)
+
+
+
+EQUATION("Price")
+/*
+Comment
+*/
+
+V("Innovation");// on s'assure que la firme a innove
+v[0]=V("Markup");
+v[1]=V("Costs");
+v[2]=(1+v[0])*v[1];
+RESULT( v[2])
+
+
+
+EQUATION("Profits")
+/*
+Profits de la firme
+*/
+V("EndTrade");
+v[3]=0;
+
+CYCLE(cur, "Product")
+ {
+  v[0]=VLS(cur,"Markup",1);
+  v[1]=VLS(cur,"Costs",1);
+  v[2]=VS(cur,"Sales_Prod");
+  v[3]=v[3]+v[0]*v[1]*v[2];
+ }
+
+v[4]=V("Fixed_Costs");
+v[5]=v[3]-v[4];
+
+RESULT( v[5])
+
+
+EQUATION("Costs")
+/*
+Cout de production du produit
+*/
+V("Innovation");// on s'assure que la firme a innove
+v[0]=V("A_Costs");
+v[1]=V("B_Costs");
+v[2]=V("C_Costs");
+v[3]=V("D_Costs");
+v[4]=V("X");
+v[5]=V("Tox");
+v[6]=V("Bio");
+v[7]=V("Eff");
+v[8]=V("Scale_Costs");
+
+v[9]=v[8]*(v[4]-v[0])*(v[1]-v[5])*(v[2]-v[6])*(v[3]-v[7]);
+
+RESULT(v[9] )
+
+
+
+EQUATION("Budget")
+/*
+Budget de la firme
+*/
+
+V("TotalSales");// on s'assure que TotalSales a ete calcule car on risque ici de remettre des ventes a zero
+V("Inverse_HHI");
+V("Enter");//on s'assure que les entrees ont eu lieu
+
+v[30]=V("NewFirm");
+if(v[30]==1)//si la firme est un nouvel entrant
+{
+	v[31]=VL("Average_Budget",1);//son budget initial est le budget moyen
+	v[5]=v[31];
+}
+else
+{
+v[0]=VL("Budget",1);
+v[1]=V("Profits");
+v[2]=VL("RD_Budget",1);
+
+v[10]=V("Switching_Period");
+if(t==v[10])
+v[11]=V("Switching_Costs");
+else
+v[11]=0;
+
+v[3]=v[0]+v[1]-v[2]-v[11];
+
+
+if(v[3]<=0)
+{
+	WRITE("Dead",1);
+	WRITE("Failure_Budget",1);//faillite liees a budget negatif
+}
+else
+{
+	WRITE("Dead",0);
+	v[5]=v[3];
+}
+
+
+v[14]=V("Regulation");
+
+if(v[14]==1)//si le produit 1 est interdit
+{
+	v[21]=V("Portfolio");
+
+	if(v[21]==0)//si la firme ne developpe pas le produit 2 elle degage
+	{
+		WRITE("Dead",1);
+		WRITE("Failure_T1",1);//faillite liees a la non adoption de la techno 2
+	}
+}
+
+
+v[12]=V("Sunset_Date");
+v[13]=V("Revision_Period");
+v[20]=V("Revision_Period_Update");
+
+
+if(t==(v[12]+v[13]-v[20])&&v[14]==0)//verifie la veille techno
+{
+	v[15]=VL("Average_RD_Watch",1);
+	v[16]=V("Alpha_Regu_Watch");
+	v[17]=VL("RD_Watch",1);
+	v[18]=V("Portfolio");
+	
+	if(v[18]==0)//si le produit 2 pas adopte
+	{
+		if(v[17]<v[15]*v[16])//si veille insuffisante => a la porte
+		{
+			WRITE("Dead",1);
+			WRITE("Failure_Watch",1);//faillites liees a veille insuffisante
+		}
+	}	
+
+}
+}
+
+RESULT(v[5] )
+
+
+EQUATION("Average_Budget")
+/*
+Le budget moyen  
+*/
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+
+ { 
+   v[2]=VS(cur,"Budget");
+   v[0]=v[0]+v[2];
+   v[1]=v[1]+1;
+   
+  
+ }
+
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+
+EQUATION("Failures")
+/*
+nombre cumule de faillites
+*/
+v[0]=VL("Failures",1);
+
+CYCLE(cur, "Firm")//on s'assure que les budgets ont ete calcules et on calcule le nb cumule de faillites
+ {
+  VS(cur,"Budget");
+  v[1]=VS(cur,"Dead");
+  if(v[1]==1)
+  {
+  		v[0]=v[0]+1;
+    v[2]=VS(cur,"Failure_Budget");
+  		INCR("Total_Failures_Budget",v[2]);//nb total de faillites pour budget insuffisant
+  		v[3]=VS(cur,"Failure_T1");
+  		INCR("Total_Failures_T1",v[3]);//nb total de faillites pour non adoption T2
+  		v[4]=VS(cur,"Failure_Watch");
+  		INCR("Total_Failures_Watch",v[4]);//nb total de faillites pour veille insuffisante
+  }
+ }
+
+RESULT(v[0] )
+
+
+EQUATION("Exit")
+/*
+processus de sorties de firmes
+*/
+V("Failures");
+
+CYCLE(cur, "Firm")//on fait sortir les firmes qui quittent le marche
+ {
+  VS(cur,"Budget");
+  v[1]=VS(cur,"Dead");
+  if(v[1]==1)
+  {
+  DELETE(cur);
+  }
+ }
+
+RESULT(1 )
+
+
+EQUATION("Enter")
+/*
+processus d'entree de firmes. En tt debut de periode, avant les echanges
+*/
+if(t==1)
+END_EQUATION(0);
+
+v[100]=VL("ms_Product1",1);
+v[101]=VL("Average_X_T1",1);
+v[102]=VL("Average_Tox_T1",1);
+v[103]=VL("Average_Bio_T1",1);
+v[104]=VL("Average_Eff_T1",1);
+v[105]=V("Xmax_Prod1");
+v[106]=V("Toxmin_Prod1");
+v[107]=V("Biomin_Prod1");
+v[108]=V("Effmax_Prod1");
+v[109]=V("Product1_Init_X");
+v[110]=V("Product1_Init_Tox");
+v[111]=V("Product1_Init_Bio");
+v[112]=V("Product1_Init_Eff");
+
+v[120]=VL("ms_Product2",1);
+v[121]=VL("Average_X_T2",1);
+v[122]=VL("Average_Tox_T2",1);
+v[123]=VL("Average_Bio_T2",1);
+v[124]=VL("Average_Eff_T2",1);
+v[125]=V("Xmax_Prod2");
+v[126]=V("Toxmin_Prod2");
+v[127]=V("Biomin_Prod2");
+v[128]=V("Effmax_Prod2");
+v[129]=V("Product2_Init_X");
+v[130]=V("Product2_Init_Tox");
+v[131]=V("Product2_Init_Bio");
+v[132]=V("Product2_Init_Eff");
+
+v[140]=V("Scale_Enter");//parametre d'echelle : proba max d'entrer
+
+v[75]=v[140]*(v[100]*((v[105]-v[101])/(v[105]-v[109])+(v[102]-v[106])/(v[110]-v[106])+(v[103]-v[107])/(v[111]-v[107])+(v[108]-v[104])/(v[108]-v[112]))/4+v[120]*((v[125]-v[121])/(v[125]-v[129])+(v[122]-v[126])/(v[130]-v[126])+(v[123]-v[127])/(v[131]-v[127])+(v[128]-v[124])/(v[128]-v[132]))/4);// proba d'entrer basee sur le potentiel techno
+
+v[76]=UNIFORM(0,1);
+
+if(v[75]>v[76])//la firme entre si proba assez elevee
+{ 
+
+INCR("Nb_Enter",1);//nb total d'entrees
+
+v[92]=MAX("IdFirm");
+cur3=SEARCH_CND("IdFirm", v[92]);
+
+cur=ADDOBJ_EX("Firm",cur3);
+
+
+WRITES(cur,"IdFirm",v[92]+1);
+
+
+WRITES(cur,"Dead",0);
+WRITES(cur,"NewFirm",1);
+WRITES(cur,"Entrant",1);
+WRITES(cur,"Sales",0);
+WRITES(cur,"Switching_Period",0);
+
+
+v[25]=UNIFORM(0,1);// initialisation du seuil pour adoption produit2 sur MS !!!!!!
+WRITES(cur,"Adoption_Threshold_MS",v[25]);
+
+v[225]=UNIFORM(0,1);// initialisation du seuil pour adoption produit2 sur K !!!!!!
+WRITES(cur,"Adoption_Threshold_K",v[225]);
+
+v[0]=UNIFORM(0,1);// initialisation de la repartition de la RD
+WRITES(cur,"RD_Split_Index",v[0]);
+
+v[1]=UNIFORM(250,250);// initialisation des couts fixes A CHANGER: identique pour tout le monde
+WRITES(cur,"Fixed_Costs",v[1]);
+
+v[85]=UNIFORM(0.5,1);// initialisation du seuil pour abandonner produit 1
+WRITES(cur,"Threshold_Abandon",v[85]);
+
+
+v[150]=V("Benchmark");//controle si la configuration est le benchmark ou pas
+if(v[150]==1)
+v[151]=0;
+else
+v[151]=UNIFORM(0,1);
+
+WRITES(cur,"Alpha_Regu",v[151]);
+
+
+v[50]=VL("Average_Sw_Costs",1);
+v[51]=V("Sw_Costsmin");
+v[22]=UNIFORM(0.8,1.2);// initialisation des switching costs fct de la moyenne
+v[52]=v[22]*v[50];
+if (v[52]>v[51])
+WRITES(cur,"Switching_Costs",v[52]);
+else
+WRITES(cur,"Switching_Costs",v[51]);
+
+
+v[53]=VL("Average_K",1);
+v[54]=V("Kmax");
+v[24]=UNIFORM(0.8,1.2);// initialisation du stock de connaissances fct de la moyenne
+v[55]=v[24]*v[53];
+if(v[55]<v[54])
+WRITES(cur,"K",v[55]);
+else
+WRITES(cur,"K",v[54]);
+
+
+v[70]=VL("Regulation",1);
+
+if(v[70]==0)
+cur1=RNDDRAWL("Firm","ms_sales",1);// l'entrant choisi une firme a copier en fonction des pdm
+else// si T1 est interdite
+{
+	CYCLE(cur2, "Firm")
+ {
+  v[71]=VS(cur2,"Portfolio");
+  if(v[71]==0)
+  	WRITES(cur2,"Probchosen",0);
+  else
+  {
+  	v[72]=VLS(cur2,"ms_sales",1);
+  	WRITES(cur2,"Probchosen",0.0001+v[72]);// on ajoute 0.0001 pour eviter le pb de la pdm = 0 pour tous
+  }
+ }
+
+cur1=RNDDRAW("Firm","Probchosen");// l'entrant choisi une firme a copier en fonction des pdm
+
+}
+
+
+v[2]=VS(cur1,"IdFirm");//identifiant de la firme copiee
+v[3]=VS(cur1,"Portfolio");
+WRITES(cur,"Portfolio",v[3]);
+v[4]=VS(cur1,"OnlyProduct2");
+WRITES(cur,"OnlyProduct2",v[4]);
+
+
+v[30]=UNIFORM(0.8,1.2);// capacite d'absorption de la nouvelle firme !!! 0.8;1.2
+v[31]=(1-v[30])+1;//pour Tox et Bio
+
+v[40]=V("Xmax_Prod1");
+v[41]=V("Toxmin_Prod1");
+v[42]=V("Effmax_Prod1");
+v[43]=V("Biomin_Prod1");
+v[44]=V("Xmax_Prod2");
+v[45]=V("Toxmin_Prod2");
+v[46]=V("Effmax_Prod2");
+v[47]=V("Biomin_Prod2");
+v[60]=V("Product1_Init_X");
+v[61]=V("Product1_Init_Tox");
+v[62]=V("Product1_Init_Eff");
+v[63]=V("Product1_Init_Bio");
+
+v[80]=V("Product2_Init_X");
+v[81]=V("Product2_Init_Tox");
+v[82]=V("Product2_Init_Eff");
+v[83]=V("Product2_Init_Bio");
+
+
+CYCLES(cur1, cur2, "Product")//copie les caracteristiques du produit 1
+ {
+  v[5]=VS(cur2,"IdProduct");
+  if(v[5]==1)
+  {
+  v[6]=VS(cur2,"X");
+  v[7]=VS(cur2,"Eff");
+  v[8]=VS(cur2,"Tox");
+  v[9]=VS(cur2,"Bio");
+  v[10]=VS(cur2,"IsAdopted");
+  }
+ }
+
+CYCLES(cur, cur2, "Product")//colle les caracteristiques du produit 1
+ {
+ v[11]=VS(cur2,"IdProduct");
+  if(v[11]==1)
+  {
+  if(v[6]*v[30]>=v[40])
+  WRITES(cur2,"X",v[40]);
+  if(v[6]*v[30]<=v[60])
+  WRITES(cur2,"X",v[60]);
+  if(v[6]*v[30]>v[60]&&v[6]*v[30]<v[40])
+  WRITES(cur2,"X",v[6]*v[30]);
+
+  if(v[7]*v[30]>=v[42])
+  WRITES(cur2,"Eff",v[42]);
+  if(v[7]*v[30]<=v[62])
+  WRITES(cur2,"Eff",v[62]);
+  if(v[7]*v[30]>v[62]&&v[7]*v[30]<v[42])
+  WRITES(cur2,"Eff",v[7]*v[30]);
+  
+  if(v[8]*v[31]<=v[41])
+  WRITES(cur2,"Tox",v[41]);
+  if(v[8]*v[31]>=v[61])
+  WRITES(cur2,"Tox",v[61]);
+  if(v[8]*v[31]>v[41]&&v[8]*v[31]<v[61])
+  WRITES(cur2,"Tox",v[8]*v[31]);
+  
+  if(v[9]*v[31]<=v[43])
+  WRITES(cur2,"Bio",v[43]);
+  if(v[9]*v[31]>=v[63])
+  WRITES(cur2,"Bio",v[63]);
+  if(v[9]*v[31]>v[43]&&v[9]*v[31]<v[63])
+  WRITES(cur2,"Bio",v[9]*v[31]);
+
+  
+  WRITES(cur2,"IsAdopted",v[10]);
+  WRITES(cur2,"Sales_Prod",0);
+  }
+ }
+
+
+CYCLES(cur1, cur2, "Product")//copie les caracteristiques du produit 2
+ {
+  v[15]=VS(cur2,"IdProduct");
+  if(v[15]==2)
+  {
+  v[16]=VS(cur2,"X");
+  v[17]=VS(cur2,"Eff");
+  v[18]=VS(cur2,"Tox");
+  v[19]=VS(cur2,"Bio");
+  v[20]=VS(cur2,"IsAdopted");
+  }
+ }
+
+CYCLES(cur, cur2, "Product")//colle les caracteristiques du produit 2
+ {
+ v[21]=VS(cur2,"IdProduct");
+  if(v[21]==2)
+  {
+  	if(v[20]==1)// si le produit est adopte
+  	{
+  	if(v[16]*v[30]>=v[44])
+  	WRITES(cur2,"X",v[44]);
+  	if(v[16]*v[30]<=v[80])
+  	WRITES(cur2,"X",v[80]);
+  	if(v[16]*v[30]>v[80]&&v[16]*v[30]<v[44])
+  	WRITES(cur2,"X",v[16]*v[30]);
+
+  	if(v[17]*v[30]>=v[46])
+  	WRITES(cur2,"Eff",v[46]);
+  	if(v[17]*v[30]<=v[82])
+  	WRITES(cur2,"Eff",v[82]);
+  	if(v[17]*v[30]>v[82]&&v[17]*v[30]<v[46])
+  	WRITES(cur2,"Eff",v[17]*v[30]);
+  
+  	if(v[18]*v[31]<=v[45])
+  	WRITES(cur2,"Tox",v[45]);
+  	if(v[18]*v[31]>=v[81])
+  	WRITES(cur2,"Tox",v[81]);
+  	if(v[18]*v[31]>v[45]&&v[18]*v[31]<v[81])
+  	WRITES(cur2,"Tox",v[18]*v[31]);
+  
+  	if(v[19]*v[31]<=v[47])
+  	WRITES(cur2,"Bio",v[47]);
+  	if(v[19]*v[31]>=v[83])
+  	WRITES(cur2,"Bio",v[83]);
+  	if(v[19]*v[31]>v[47]&&v[19]*v[31]<v[83])
+  	WRITES(cur2,"Bio",v[19]*v[31]);
+  
+
+  	WRITES(cur2,"IsAdopted",v[20]);
+  	WRITES(cur2,"Sales_Prod",0);
+  	}
+  
+	if(v[20]==0)// si le produit n'est pas adopte il recupere les perf initiales
+  	{
+  	WRITES(cur2,"X",v[16]);
+  	WRITES(cur2,"Eff",v[17]);
+  	WRITES(cur2,"Tox",v[18]);
+  	WRITES(cur2,"Bio",v[19]);
+
+  	WRITES(cur2,"IsAdopted",v[20]);
+  	WRITES(cur2,"Sales_Prod",0);
+  	}
+  }
+ }
+
+}
+else
+END_EQUATION(0);
+
+
+RESULT( v[92]+1)
+
+
+EQUATION("NbFirms")
+/*
+nb total de firmes sur le marche
+*/
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+{
+ 	VS(cur,"Budget");//on s'assure que les sorties ont eu lieu (et les entrees)
+  v[0]=v[0]+1;
+  v[2]=VS(cur,"Entrant");
+  v[1]=v[1]+v[2];
+}
+
+WRITE("Entrant_Share",v[1]/v[0]);//part de firmes entrantes dans le total
+
+RESULT( v[0])
+
+
+
+
+EQUATION("Delete")
+/*
+supprime les objets Product_Purchase 
+*/
+
+CYCLE(cur, "Firm")
+{
+ 	VS(cur,"Budget");//on s'assure que les sorties ont eu lieu (et les entrees)
+  v[0]=VS(cur,"Dead");
+  if(v[0]==1)// si la firme est sortie on supprime ses produits
+  {
+  	v[1]=VS(cur,"IdFirm");
+  	CYCLE(cur1, "Product_Purchase")
+   {
+    v[2]=VS(cur1,"IdFirm_Purchase");
+    if(v[1]==v[2])
+    DELETE(cur1);
+   }
+  }
+}
+RESULT(1 )
+
+
+EQUATION("Create")
+/*
+cree les ojets Product_Purchase 
+*/
+
+CYCLE(cur, "Firm")
+ {  
+	v[3]=VS(cur,"NewFirm");
+  if(v[3]==1)// si la firme est nouvelle on cree ses produits
+  {
+  	v[4]=MAX("IdFirm_Purchase");
+  	cur2=SEARCH_CND("IdFirm_Purchase", v[4]);//choisi un objet Product_Purchase comme base
+  	cur3=ADDOBJ_EX("Product_Purchase",cur2);// cur3 = l'objet cree
+  	v[5]=VS(cur,"IdFirm");
+  	WRITES(cur3,"IdFirm_Purchase",v[5]);
+  	WRITES(cur3,"IdProduct_Purchase",1);
+  	
+  	v[10]=VS(cur,"Portfolio");
+  	WRITES(cur3,"Purchase_Portfolio",v[10]);
+  	cur6=SEARCH_CNDS(cur, "IdProduct", 1);//cherche le produit 1 de la firme entrante
+  	v[11]=VS(cur6,"X");
+  	WRITES(cur3,"Purchase_X",v[11]);
+  	v[12]=VS(cur6,"Tox");
+  	WRITES(cur3,"Purchase_Tox",v[12]);
+  	v[13]=VS(cur6,"Bio");
+  	WRITES(cur3,"Purchase_Bio",v[13]);
+  	v[14]=VS(cur6,"IsAdopted");
+  	WRITES(cur3,"Purchase_IsAdopted",v[14]);
+  	WRITES(cur3,"Purchase_MS",0);
+  	
+  v[30]=V("A_Costs");
+  v[31]=V("B_Costs");
+  v[32]=V("C_Costs");
+  v[33]=V("D_Costs");
+  v[34]=VS(cur6,"Eff");
+  v[35]=V("Scale_Costs");
+  v[36]=VS(cur6,"Markup");
+  
+  v[37]=(1+v[36])*v[35]*(v[11]-v[30])*(v[31]-v[12])*(v[32]-v[13])*(v[33]-v[34]);//calcul du prix
+  WRITES(cur3,"Purchase_Price",v[37]);
+  
+  	
+  	v[6]=MAX("IdFirm_Purchase");
+  	cur4=SEARCH_CND("IdFirm_Purchase", v[6]);//choisi un objet Product_Purchase comme base
+  	cur5=ADDOBJ_EX("Product_Purchase",cur4);// cur5 = l'objet cree
+  	WRITES(cur5,"IdFirm_Purchase",v[5]);
+  	WRITES(cur5,"IdProduct_Purchase",2);
+  
+  	WRITES(cur5,"Purchase_Portfolio",v[10]);
+  	cur7=SEARCH_CNDS(cur, "IdProduct", 2);//cherche le produit 2 de la firme entrante
+  	v[21]=VS(cur7,"X");
+  	WRITES(cur5,"Purchase_X",v[21]);
+  	v[22]=VS(cur7,"Tox");
+  	WRITES(cur5,"Purchase_Tox",v[22]);
+  	v[23]=VS(cur7,"Bio");
+  	WRITES(cur5,"Purchase_Bio",v[23]);
+  	v[24]=VS(cur7,"IsAdopted");
+  	WRITES(cur5,"Purchase_IsAdopted",v[24]);
+  	WRITES(cur5,"Purchase_MS",0);
+  
+  v[44]=VS(cur7,"Eff");
+  v[46]=VS(cur7,"Markup");
+  
+  v[47]=(1+v[46])*v[35]*(v[21]-v[30])*(v[31]-v[22])*(v[32]-v[23])*(v[33]-v[44]);//calcul du prix
+  WRITES(cur5,"Purchase_Price",v[47]);
+  }
+ }
+
+RESULT(1 )
+
+
+EQUATION("ms_Product1")
+/*
+Part de march? de la technologie 1
+*/
+V("EndTrade");
+v[0]=V("Total_Customers");
+v[1]=0;
+CYCLE(cur, "Customer")
+ {
+  v[2]=VS(cur,"Product_Type");
+  if(v[2]==1)
+  v[1]+=1;
+ }
+v[3]=v[1]/v[0];
+
+RESULT(v[3])
+
+
+
+
+EQUATION("ms_Product2")
+/*
+Part de march? de la technologie 2
+*/
+V("EndTrade");
+v[0]=V("Total_Customers");
+v[1]=0;
+CYCLE(cur, "Customer")
+ {
+  v[2]=VS(cur,"Product_Type");
+  if(v[2]==2)
+  v[1]+=1;
+ }
+v[3]=v[1]/v[0];
+
+RESULT(v[3])
+
+
+
+
+EQUATION("ms_sales")
+/*
+Part de march? de la firme
+*/
+
+v[0]=V("TotalSales");
+v[1]=V("Sales");
+if(v[0]>0)
+ v[2]=v[1]/v[0];
+else
+ v[2]=0; 
+RESULT(v[2])
+
+
+
+EQUATION("ms_sales_Product")
+/*
+Part de march? du produit
+*/
+v[0]=V("TotalSales");
+v[1]=V("Sales_Prod");
+if(v[0]>0)
+ v[2]=v[1]/v[0];
+else
+ v[2]=0; 
+RESULT(v[2])
+
+
+
+
+
+EQUATION("TotalSales")
+/*
+Nombre total de ventes
+*/
+V("EndTrade");
+v[0]=SUM("Sales");
+
+RESULT(v[0] )
+
+
+
+EQUATION("Average_K")  
+
+/*
+La performance moyenne de l'industrie réalisee sur K 
+*/
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+
+ { 
+   v[2]=VS(cur,"K");
+   v[0]=v[0]+v[2];
+   v[1]=v[1]+1;
+   
+ }
+
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+
+EQUATION("Average_Sw_Costs")
+/*
+La performance moyenne de l'industrie réalisée sur swintching_costs  
+*/
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+
+ { 
+   v[2]=VS(cur,"Switching_Costs");
+   v[0]=v[0]+v[2];
+   v[1]=v[1]+1;
+   
+  
+ }
+
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+
+
+/*PROCESSUS D'INNOVATION*/
+
+
+EQUATION("RD_Budget")
+/*
+Budget total de RD de la firme
+*/
+
+v[0]=V("Budget");
+v[1]=V("RDshare");
+
+v[2]=v[1]*v[0];
+
+RESULT(v[2] )
+
+
+
+
+EQUATION("RD1")
+/*
+RD budget pour le produit 1
+*/
+V("Adoption_Product2");//on s'assure que le choix de produit a developper est fix?
+V("Only_Product2");
+
+v[1]=V("RD_Budget");
+v[0]=V("Portfolio");
+
+
+
+if(v[0]==2)// developpe que le produit 2
+{
+	v[2]=0;
+}
+else
+{
+	v[3]=V("RD_Split");// part du budget total de RD affectee au produit 1
+	v[2]=v[3]*v[1];
+}
+
+
+RESULT( v[2])
+
+
+
+
+
+EQUATION("RD2")
+/*
+RD budget pour le produit 2
+*/
+V("Adoption_Product2");
+V("Only_Product2");
+
+v[1]=V("RD_Budget");
+v[0]=V("Portfolio");
+
+
+if(v[0]==0)// developpe que le produit 1
+{
+	v[2]=0;
+}
+
+if(v[0]==1)// developpe les produit 1 et 2
+{
+	v[3]=V("RD_Split");// part du budget total de RD affectee au produit 1
+	v[2]=(1-v[3])*v[1];
+}
+
+if(v[0]==2)// developpe que le produit 2
+{
+	v[2]=v[1];
+}
+
+RESULT( v[2])
+
+
+
+EQUATION("RD_Watch")
+/*
+RD de veille techno sur le produit 2
+*/
+V("Adoption_Product2");
+V("Only_Product2");
+
+v[1]=V("RD_Budget");
+v[0]=V("Portfolio");
+
+
+if(v[0]==0)// developpe que le produit 1
+{
+	v[3]=V("RD_Split");// part du budget total de RD affectee au produit 1
+	v[2]=(1-v[3])*v[1];// on affecte l'autre part a la veille
+}
+else
+{
+	v[2]=0;
+}
+
+RESULT( v[2])
+
+
+
+EQUATION("Watch")
+/*
+veille techno sur le produit 2 : permet d'abaisser les switching costs
+*/
+V("EndTrade");//veille en fin de periode
+
+v[0]=V("RD_Watch");
+v[1]=V("scale");// parametre d'echelle
+v[2]=1-exp(-v[0]*v[1]);
+
+v[3]=UNIFORM(0,1);//diminution des switching costs et cumule de cnnaissances
+		if(v[3]<=v[2])
+		{
+		v[4]=V("Switching_Costs");
+		v[5]=V("Alpha_Sw_Costs");//Scale parameter
+		v[6]=V("Sw_Costsmin");
+		WRITE("Switching_Costs",v[4]-v[5]*v[3]*(v[4]-v[6]));// mise ? jour de Costs
+
+		v[7]=V("K");
+		v[8]=V("Alpha_K");
+		v[9]=V("Kmax");
+		WRITE("K",v[7]+v[8]*v[3]*(v[9]-v[7]));// mise ? jour de K
+		}
+
+RESULT(1 )
+
+
+EQUATION("Average_RD_Watch")
+/*
+RD veille moyenne
+*/
+v[5]=VL("Average_RD_Watch",1);
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+   v[2]=VS(cur,"RD_Watch");
+   if(v[2]!=0)
+   {
+   	v[0]=v[0]+v[2];
+   	v[1]=v[1]+1;
+   } 
+ }
+
+if(v[1]==0)
+v[4]=v[5];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+
+
+
+EQUATION("Innovation")
+/*
+Processus d'innovation
+la RD permet d'innover sur chaque dimension
+*/
+V("EndTrade");//RD en fin de periode
+v[30]=V("IdProduct");
+
+if(v[30]==1)// produit de type 1
+{
+	v[0]=V("RD1");
+	v[1]=V("scale");// parametre d'echelle
+	v[2]=1-exp(-v[0]*v[1]);
+
+	
+	v[3]=UNIFORM(0,1);// innovation sur X
+
+		if(v[3]<=v[2])
+		{
+		v[4]=V("X");
+		v[5]=V("Alpha_X");//Scale parameter
+		v[6]=V("Xmax_Prod1");
+		WRITE("X",v[4]+v[5]*v[3]*(v[6]-v[4]));// mise ? jour de X
+		}
+	
+
+	v[13]=UNIFORM(0,1);// innovation sur Tox
+
+		if(v[13]<=v[2])
+		{
+		v[14]=V("Tox");
+		v[15]=V("Alpha_Tox");//Scale parameter
+		v[16]=V("Toxmin_Prod1");
+		WRITE("Tox",v[14]-v[15]*v[13]*(v[14]-v[16]));// mise ? jour de Tox
+		}
+
+
+		v[23]=UNIFORM(0,1);// innovation sur Eff
+		if(v[23]<=v[2])
+		{
+		v[24]=V("Eff");
+		v[25]=V("Alpha_Eff");//Scale parameter
+		v[26]=V("Effmax_Prod1");
+		WRITE("Eff",v[24]+v[25]*v[23]*(v[26]-v[24]));// mise ? jour de Eff
+		}
+
+  		v[33]=UNIFORM(0,1);// innovation sur Bio
+		if(v[33]<=v[2])
+		{
+		v[34]=V("Bio");
+		v[35]=V("Alpha_Bio");//Scale parameter
+		v[36]=V("Biomin_Prod1");
+		WRITE("Bio",v[34]-v[35]*v[33]*(v[34]-v[36]));// mise à jour de Bio
+		}
+}
+
+if(v[30]==2)// produit de type 2
+{
+	v[0]=V("RD2");
+	v[1]=V("scale");// parametre d'echelle
+	v[2]=1-exp(-v[0]*v[1]);
+	
+	v[3]=UNIFORM(0,1);// innovation sur X
+
+		if(v[3]<=v[2])
+		{
+		v[4]=V("X");
+		v[5]=V("Alpha_X");//Scale parameter
+		v[6]=V("Xmax_Prod2");
+		WRITE("X",v[4]+v[5]*v[3]*(v[6]-v[4]));// mise ? jour de X
+		}
+	
+		v[13]=UNIFORM(0,1);// innovation sur Tox
+
+		if(v[13]<=v[2])
+		{
+		v[14]=V("Tox");
+		v[15]=V("Alpha_Tox");//Scale parameter
+		v[16]=V("Toxmin_Prod2");
+		WRITE("Tox",v[14]-v[15]*v[13]*(v[14]-v[16]));// mise ? jour de Tox
+		}
+	
+		v[23]=UNIFORM(0,1);// innovation sur Eff
+
+		if(v[23]<=v[2])
+		{
+		v[24]=V("Eff");
+		v[25]=V("Alpha_Eff");//Scale parameter
+		v[26]=V("Effmax_Prod2");
+		WRITE("Eff",v[24]+v[25]*v[23]*(v[26]-v[24]));// mise ? jour de Eff
+		}
+
+    v[33]=UNIFORM(0,1);// innovation sur Bio
+
+		if(v[33]<=v[2])
+		{
+		v[34]=V("Bio");
+		v[35]=V("Alpha_Bio");//Scale parameter
+		v[36]=V("Biomin_Prod2");
+		WRITE("Bio",v[34]-v[35]*v[33]*(v[34]-v[36]));// mise à jour de Bio
+		}
+}
+
+RESULT(1)
+
+
+
+
+
+
+EQUATION("Update_Purchase")
+/*
+Comment
+*/
+v[0]=V("Update");
+
+RESULT(1 )
+
+
+
+
+
+FUNCTION("Update")
+/*
+mise a jour des caracteristiques des produits dans Product_Purchase
+Fonction appelee par Update_Purchase pour mise a jour
+Mise ? jour en fin de p?riode
+*/
+
+CYCLE(cur, "Firm")// on s'assure que chaque firme a fini son processus d'innovation et son choix de technologie
+ {
+  VS(cur,"Innovation");
+  VS(cur,"Adoption_Product2");
+  VS(cur,"Only_Product2");
+ }
+
+v[0]=VS(c,"IdFirm_Purchase");
+v[1]=VS(c,"IdProduct_Purchase");
+
+CYCLE(cur, "Firm")
+ {
+  v[2]=VS(cur,"IdFirm");
+  if(v[2]==v[0])
+  {
+  	v[15]=VS(cur,"Portfolio");//recupere le portefeuille de la firme
+  	CYCLES(cur, cur1, "Product")
+   {
+    v[3]=VS(cur1,"IdProduct");
+    if(v[3]==v[1])
+    {
+    WRITES(c,"Purchase_Portfolio",v[15]);//ecrit le portefeuille de la firme
+    v[4]=VS(cur1,"X");
+    WRITES(c,"Purchase_X",v[4]);
+    v[5]=VS(cur1,"Tox");
+    WRITES(c,"Purchase_Tox",v[5]);
+    v[6]=VS(cur1,"Price");
+    WRITES(c,"Purchase_Price",v[6]);
+    v[7]=VS(cur1,"Bio");
+    WRITES(c,"Purchase_Bio",v[7]);
+    v[8]=VS(cur1,"IsAdopted");
+    WRITES(c,"Purchase_IsAdopted",v[8]);
+    v[9]=VS(cur1,"ms_sales_Product");
+    WRITES(c,"Purchase_MS",v[9]);
+    }
+   }
+
+  }
+ }
+ 
+
+RESULT( 1)
+
+
+
+
+EQUATION("Min_Price")
+/*
+retourne le min sur Price
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+ 
+v[0]=100000000;
+
+CYCLE(cur, "Firm")
+ {
+ CYCLES(cur, cur1, "Product")
+  {
+  	v[1]=VS(cur1,"IsAdopted");
+  	if(v[1]==1)//Verifie que le produit soit commercialise
+   {	
+   	v[2]=VS(cur1,"Price");
+   	if(v[2]<=v[0])
+		v[0]=v[2];
+   }
+  } 
+ }
+
+RESULT(v[0] )
+
+
+
+EQUATION("Min_Tox")
+/*
+retourne le min sur Tox
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+ 
+v[0]=100000000;
+
+CYCLE(cur, "Firm")
+ {
+ CYCLES(cur, cur1, "Product")
+  {
+  	v[1]=VS(cur1,"IsAdopted");
+  	if(v[1]==1)//Verifie que le produit soit commercialise
+   {	
+   	v[2]=VS(cur1,"Tox");
+   	if(v[2]<=v[0])
+		v[0]=v[2];
+   }
+  } 
+ }
+
+RESULT(v[0] )
+
+
+EQUATION("Min_Bio")
+/*
+retourne le min sur bio
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+ 
+v[0]=100000000;
+
+CYCLE(cur, "Firm")
+ {
+ CYCLES(cur, cur1, "Product")
+  {
+  	v[1]=VS(cur1,"IsAdopted");
+  	if(v[1]==1)//Verifie que le produit soit commercialise
+   {	
+   	v[2]=VS(cur1,"Bio");
+   	if(v[2]<=v[0])
+		v[0]=v[2];
+   }
+  } 
+ }
+
+RESULT(v[0] )
+
+
+
+EQUATION("Max_X")
+/*
+retourne le max sur X
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+ 
+v[0]=-1000000000;
+
+CYCLE(cur, "Firm")
+ {
+ CYCLES(cur, cur1, "Product")
+  {
+  	v[1]=VS(cur1,"IsAdopted");
+  	if(v[1]==1)//Verifie que le produit soit commercialise
+   {	
+   	v[2]=VS(cur1,"X");
+   	if(v[2]>=v[0])
+		v[0]=v[2];
+   }
+  } 
+ }
+
+RESULT(v[0] )
+
+
+EQUATION("Average_Costs_T1")
+/*
+Costs moyen de la techno 1
+
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+
+v[8]=VL("Average_Costs_T1",1);
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 	v[5]=VS(cur,"Portfolio");
+ 	if(v[5]!=2)//si produit 1 adopte
+ 	{
+ 		CYCLES(cur, cur1, "Product")
+  		{
+  			v[7]=VS(cur1,"IdProduct");
+  			if(v[7]==1)
+  			{			
+  				v[2]=VS(cur1,"Costs");
+   				v[0]=v[0]+v[2];
+   				v[1]=v[1]+1;
+   			}
+  		} 
+  	}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+
+EQUATION("Average_Costs_T2")
+/*
+Cout moyen de la techno 2
+
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+
+v[8]=VL("Average_Costs_T2",1);
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 	v[5]=VS(cur,"Portfolio");
+ 	if(v[5]!=0)//si produit 2 adopte
+ 	{
+ 		CYCLES(cur, cur1, "Product")
+  		{
+  			v[7]=VS(cur1,"IdProduct");
+  			if(v[7]==2)
+  			{			
+  				v[2]=VS(cur1,"Costs");
+   				v[0]=v[0]+v[2];
+   				v[1]=v[1]+1;
+   			}
+  		} 
+  	}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+EQUATION("Average_X_T1")
+/*
+X moyen de la techno 1
+
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+
+v[8]=VL("Average_X_T1",1);
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 	v[5]=VS(cur,"Portfolio");
+ 	if(v[5]!=2)//si produit 1 adopte
+ 	{
+ 		CYCLES(cur, cur1, "Product")
+  		{
+  			v[7]=VS(cur1,"IdProduct");
+  			if(v[7]==1)
+  			{			
+  				v[2]=VS(cur1,"X");
+   				v[0]=v[0]+v[2];
+   				v[1]=v[1]+1;
+   			}
+  		} 
+  	}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+
+EQUATION("Average_X_T2")
+/*
+X moyen de la techno 2. !!!! modifi? car pb en cas de reglementation stricte !!!
+
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+
+v[8]=V("Product2_Init_X");// !!!!!!!
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 	v[5]=VS(cur,"Portfolio");
+ 	if(v[5]!=0)//si produit 2 adopte
+ 	{
+ 		CYCLES(cur, cur1, "Product")
+  		{
+  			v[7]=VS(cur1,"IdProduct");
+  			if(v[7]==2)
+  			{			
+  				v[2]=VS(cur1,"X");
+   				v[0]=v[0]+v[2];
+   				v[1]=v[1]+1;
+   			}
+  		} 
+  	}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+EQUATION("Average_Bio_T1")
+/*
+Bio moyen de la techno 1
+
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+
+v[8]=VL("Average_Bio_T1",1);
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 	v[5]=VS(cur,"Portfolio");
+ 	if(v[5]!=2)//si produit 1 adopte
+ 	{
+ 		CYCLES(cur, cur1, "Product")
+  		{
+  			v[7]=VS(cur1,"IdProduct");
+  			if(v[7]==1)
+  			{			
+  				v[2]=VS(cur1,"Bio");
+   				v[0]=v[0]+v[2];
+   				v[1]=v[1]+1;
+   			}
+  		} 
+  	}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+
+EQUATION("Average_Bio_T2")
+/*
+Bio moyen de la techno 2 !!!! modifi? car pb en cas de reglementation stricte !!!
+
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+
+v[8]=V("Product2_Init_Bio");// !!!!!!!
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 	v[5]=VS(cur,"Portfolio");
+ 	if(v[5]!=0)//si produit 2 adopte
+ 	{
+ 		CYCLES(cur, cur1, "Product")
+  		{
+  			v[7]=VS(cur1,"IdProduct");
+  			if(v[7]==2)
+  			{			
+  				v[2]=VS(cur1,"Bio");
+   				v[0]=v[0]+v[2];
+   				v[1]=v[1]+1;
+   			}
+  		} 
+  	}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+EQUATION("Average_Tox_T1")
+/*
+Tox moyen de la techno 1
+
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+
+v[8]=VL("Average_Tox_T1",1);
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 	v[5]=VS(cur,"Portfolio");
+ 	if(v[5]!=2)//si produit 1 adopte
+ 	{
+ 		CYCLES(cur, cur1, "Product")
+  		{
+  			v[7]=VS(cur1,"IdProduct");
+  			if(v[7]==1)
+  			{			
+  				v[2]=VS(cur1,"Tox");
+   				v[0]=v[0]+v[2];
+   				v[1]=v[1]+1;
+   			}
+  		} 
+  	}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+
+EQUATION("Average_Tox_T2")
+/*
+Tox moyen de la techno 2. !!!! modifi? car pb en cas de reglementation stricte !!!
+
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+
+v[8]=V("Product2_Init_Tox");// !!!!!!!
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 	v[5]=VS(cur,"Portfolio");
+ 	if(v[5]!=0)//si produit 2 adopte
+ 	{
+ 		CYCLES(cur, cur1, "Product")
+  		{
+  			v[7]=VS(cur1,"IdProduct");
+  			if(v[7]==2)
+  			{			
+  				v[2]=VS(cur1,"Tox");
+   				v[0]=v[0]+v[2];
+   				v[1]=v[1]+1;
+   			}
+  		} 
+  	}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+EQUATION("Average_Eff_T1")
+/*
+Eff moyen de la techno 1
+
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+
+v[8]=VL("Average_Eff_T1",1);
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 	v[5]=VS(cur,"Portfolio");
+ 	if(v[5]!=2)//si produit 1 adopte
+ 	{
+ 		CYCLES(cur, cur1, "Product")
+  		{
+  			v[7]=VS(cur1,"IdProduct");
+  			if(v[7]==1)
+  			{			
+  				v[2]=VS(cur1,"Eff");
+   				v[0]=v[0]+v[2];
+   				v[1]=v[1]+1;
+   			}
+  		} 
+  	}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+
+EQUATION("Average_Eff_T2")
+/*
+Eff moyen de la techno 2. !!!! modifi? car pb en cas de reglementation stricte !!!
+
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+
+v[8]=V("Product2_Init_Eff");// !!!!!!!
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 	v[5]=VS(cur,"Portfolio");
+ 	if(v[5]!=0)//si produit 2 adopte
+ 	{
+ 		CYCLES(cur, cur1, "Product")
+  		{
+  			v[7]=VS(cur1,"IdProduct");
+  			if(v[7]==2)
+  			{			
+  				v[2]=VS(cur1,"Eff");
+   				v[0]=v[0]+v[2];
+   				v[1]=v[1]+1;
+   			}
+  		} 
+  	}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+EQUATION("Markup")
+/*
+markup endogene
+*/
+v[0]=V("NewFirm");
+if(v[0]==1)//si la firme est un nouvel entrant
+{
+	v[20]=V("IdProduct");
+	if(v[20]==1)//si c'est un produit de type T1
+	{
+		v[1]=VL("Average_Markup_T1",1);
+		v[2]=v[1];
+	}
+	if(v[20]==2)//si c'est un produit de type T2
+	{
+		v[1]=VL("Average_Markup_T2",1);
+		v[2]=v[1];
+	}
+}
+else
+{
+	v[3]=VL("Markup",1);
+
+	v[4]=V("IsAdopted");
+	if(v[4]==0)// si le produit n'existe pas on garde le markup
+	END_EQUATION(v[3]);
+
+	v[5]=V("ms_sales_Product");
+	v[6]=V("Inverse_HHI");
+	v[7]=V("IdProduct");
+	if(v[7]==1)
+	{
+		v[8]=V("Max_ms_sales_Product_T1");
+		v[9]=V("Min_ms_sales_Product_T1");
+	}
+	if(v[7]==2)
+	{
+		v[8]=V("Max_ms_sales_Product_T2");
+		v[9]=V("Min_ms_sales_Product_T2");
+	}
+
+	if(v[8]==v[9])//si monopole ou equirepartition des ms
+	v[2]=v[5]+1/v[6];
+	else
+	v[2]=((v[5]-v[9])/(v[8]-v[9]))+1/v[6];
+}
+
+RESULT(v[2] )
+
+
+EQUATION("Average_Markup_T1")
+/*
+Comment
+*/
+V("EndTrade");
+
+v[8]=VL("Average_Markup_T1",1);
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 		CYCLES(cur, cur1, "Product")
+  		{		
+  			v[2]=VS(cur1,"IdProduct");
+  			if(v[2]==1)//verifie que c'est T1
+  			{
+  				v[3]=VS(cur1,"Markup");
+  				v[4]=VS(cur1,"Sales_Prod");
+   				v[0]=v[0]+v[3]*v[4];
+   				v[1]=v[1]+v[4];
+   			}
+   		}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4] )
+
+
+
+EQUATION("Average_Markup_T2")
+/*
+Comment
+*/
+V("EndTrade");
+
+v[8]=VL("Average_Markup_T2",1);
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 		CYCLES(cur, cur1, "Product")
+  		{		
+  			v[2]=VS(cur1,"IdProduct");
+  			if(v[2]==2)//verifie que c'est T2
+  			{
+  				v[3]=VS(cur1,"Markup");
+  				v[4]=VS(cur1,"Sales_Prod");
+   				v[0]=v[0]+v[3]*v[4];
+   				v[1]=v[1]+v[4];
+   			}
+   		}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4] )
+
+
+
+EQUATION("Max_ms_sales_Product_T1")
+/*
+
+*/
+
+v[0]=0;
+
+CYCLE(cur, "Firm")
+ {
+ CYCLES(cur, cur1, "Product")
+  {
+  	v[1]=VS(cur1,"IdProduct");
+  	if(v[1]==1)//verifie que c'est T1
+   {
+   	v[2]=VS(cur1,"IsAdopted");//Verifie que le produit soit commercialise
+   	if(v[2]==1)
+   	{
+   		v[3]=VS(cur1,"ms_sales_Product");
+   		if(v[3]>=v[0])
+			v[0]=v[3];
+		}
+   }
+  } 
+ }
+
+RESULT(v[0])
+
+
+EQUATION("Max_ms_sales_Product_T2")
+/*
+
+*/
+
+v[0]=0;
+
+CYCLE(cur, "Firm")
+ {
+ CYCLES(cur, cur1, "Product")
+  {
+  	v[1]=VS(cur1,"IdProduct");
+  	if(v[1]==2)//verifie que c'est T2
+   {
+   	v[2]=VS(cur1,"IsAdopted");//Verifie que le produit soit commercialise
+   	if(v[2]==1)
+   	{
+   		v[3]=VS(cur1,"ms_sales_Product");
+   		if(v[3]>=v[0])
+			v[0]=v[3];
+		}
+   }
+  } 
+ }
+
+RESULT(v[0])
+
+
+EQUATION("Min_ms_sales_Product_T1")
+/*
+
+*/
+
+v[0]=1;
+
+CYCLE(cur, "Firm")
+ {
+ CYCLES(cur, cur1, "Product")
+  {
+  	v[1]=VS(cur1,"IdProduct");
+  	if(v[1]==1)//verifie que c'est T1
+   {
+   	v[2]=VS(cur1,"IsAdopted");//Verifie que le produit soit commercialise
+   	if(v[2]==1)
+   	{
+   		v[3]=VS(cur1,"ms_sales_Product");
+   		if(v[3]<=v[0])
+			v[0]=v[3];
+		}
+   }
+  } 
+ }
+
+RESULT(v[0])
+
+
+EQUATION("Min_ms_sales_Product_T2")
+/*
+
+*/
+
+v[0]=1;
+
+CYCLE(cur, "Firm")
+ {
+ CYCLES(cur, cur1, "Product")
+  {
+  	v[1]=VS(cur1,"IdProduct");
+  	if(v[1]==2)//verifie que c'est T2
+   {
+   	v[2]=VS(cur1,"IsAdopted");//Verifie que le produit soit commercialise
+   	if(v[2]==1)
+   	{
+   		v[3]=VS(cur1,"ms_sales_Product");
+   		if(v[3]<=v[0])
+			v[0]=v[3];
+		}
+   }
+  } 
+ }
+
+RESULT(v[0])
+
+
+EQUATION("Inverse_HHI")
+/*
+return the inverse Herfindahl-Hirschman Index
+*/
+V("EndTrade");
+
+
+v[0]=0;
+CYCLE(cur,"Firm")
+{
+v[1]=VS(cur,"ms_sales");
+v[0]+=v[1]*v[1];
+}
+if(v[0]==0)
+v[2]=0;
+else
+v[2]=1/v[0];
+
+RESULT(v[2] )
+
+
+EQUATION("Bio_Acc")
+/*
+Bioaccumulation
+*/
+V("EndTrade");
+
+v[0]=VL("Bio_Acc",1);
+v[1]=V("Absorption");//capacite d'absorption du milieu
+
+v[5]=0;
+CYCLE(cur, "Firm")
+ {
+	CYCLES(cur, cur1, "Product")
+ {
+  v[2]=VS(cur1,"Sales_Prod");
+  v[3]=VS(cur1,"Bio");
+  v[5]=v[5]+v[2]*v[3];
+ }
+ }
+
+v[6]=v[0]-v[1]+v[5];
+if(v[6]<0)
+v[7]=0;
+else
+v[7]=v[6];
+
+RESULT(v[7] )
+
+
+EQUATION("Tox_Acc")
+/*
+Indicateur global de toxicite (sante humaine)
+*/
+V("EndTrade");
+
+v[0]=VL("Tox_Acc",1);
+v[1]=V("Toxmin_Prod1");//reflete la dose journaliere admissible
+
+v[5]=0;
+CYCLE(cur, "Firm")
+ {
+	CYCLES(cur, cur1, "Product")
+ {
+  v[2]=VS(cur1,"Sales_Prod");
+  v[3]=VS(cur1,"Tox");
+  if(v[3]>=v[1])
+  v[5]=v[5]+v[2]*(v[3]-v[1]);
+ }
+ }
+
+v[6]=v[0]+v[5];
+if(v[6]<0)
+v[7]=0;
+else
+v[7]=v[6];
+
+RESULT(v[7] )
+
+
+EQUATION("Min_TotalCustomers")
+/*
+nombre le plus faible de clients atteint au cours de la simu
+*/
+v[0]=VL("Min_TotalCustomers",1);
+v[1]=V("Total_Customers");
+if(v[1]<v[0])
+v[2]=v[1];
+else
+v[2]=v[0];
+
+RESULT(v[2] )
+
+
+
+EQUATION("Average_Tox")
+/*
+
+*/
+V("EndTrade");
+
+v[8]=VL("Average_Tox",1);
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 		CYCLES(cur, cur1, "Product")
+  		{		
+  				v[2]=VS(cur1,"Tox");
+  				v[3]=VS(cur1,"Sales_Prod");
+   				v[0]=v[0]+v[2]*v[3];
+   				v[1]=v[1]+v[3];
+   		}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+EQUATION("Average_Bio")
+/*
+
+*/
+V("EndTrade");
+
+v[8]=VL("Average_Bio",1);
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 		CYCLES(cur, cur1, "Product")
+  		{		
+  				v[2]=VS(cur1,"Bio");
+  				v[3]=VS(cur1,"Sales_Prod");
+   				v[0]=v[0]+v[2]*v[3];
+   				v[1]=v[1]+v[3];
+  		} 
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+
+EQUATION("Average_Costs")
+/*
+
+*/
+V("EndTrade");
+
+v[8]=VL("Average_Costs",1);
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 		CYCLES(cur, cur1, "Product")
+  		{		
+  				v[2]=VS(cur1,"Costs");
+  				v[3]=VS(cur1,"Sales_Prod");
+   				v[0]=v[0]+v[2]*v[3];
+   				v[1]=v[1]+v[3];
+   		}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+
+EQUATION("Average_X")
+/*
+
+*/
+V("EndTrade");
+
+v[8]=VL("Average_X",1);
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 		CYCLES(cur, cur1, "Product")
+  		{		
+  				v[2]=VS(cur1,"X");
+  				v[3]=VS(cur1,"Sales_Prod");
+   				v[0]=v[0]+v[2]*v[3];
+   				v[1]=v[1]+v[3];
+   		}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+
+
+EQUATION("Average_Eff")
+/*
+
+*/
+V("EndTrade");
+
+v[8]=VL("Average_Eff",1);
+
+v[0]=0;
+v[1]=0;
+
+CYCLE(cur, "Firm")
+ {
+ 		CYCLES(cur, cur1, "Product")
+  		{		
+  				v[2]=VS(cur1,"Eff");
+  				v[3]=VS(cur1,"Sales_Prod");
+   				v[0]=v[0]+v[2]*v[3];
+   				v[1]=v[1]+v[3];
+   		}
+ }
+
+if(v[1]==0)
+v[4]=v[8];
+else
+v[4]=v[0]/v[1];
+
+RESULT(v[4])
+  
+  
+EQUATION("Absolute_maxX_P2")
+/*
+valeur de X la plus eleve jusqu'a present pour le produit 2
+*/
+
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+ 
+v[0]=VL("Absolute_maxX_P2",1);
+
+CYCLE(cur, "Firm")
+ {
+ 	v[5]=VS(cur,"Portfolio");
+ 	if(v[5]!=0)//si produit 2 adopte
+ 	{
+ 		CYCLES(cur, cur1, "Product")
+  		{
+  			v[7]=VS(cur1,"IdProduct");
+  			if(v[7]==2)
+  			{			
+  				v[2]=VS(cur1,"X");
+   				if(v[2]>v[0])
+   				v[0]=v[2];
+   			}
+  		} 
+  	}
+ }
+
+RESULT(v[0] )
+
+
+EQUATION("Absolute_maxEff_P2")
+/*
+valeur de Eff la plus forte jusqu'a present pour le produit 2
+*/
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+ 
+v[0]=VL("Absolute_maxEff_P2",1);
+
+CYCLE(cur, "Firm")
+ {
+ 	v[5]=VS(cur,"Portfolio");
+ 	if(v[5]!=0)//si produit 2 adopte
+ 	{
+ 		CYCLES(cur, cur1, "Product")
+  		{
+  			v[7]=VS(cur1,"IdProduct");
+  			if(v[7]==2)
+  			{			
+  				v[2]=VS(cur1,"Eff");
+   				if(v[2]>v[0])
+   				v[0]=v[2];
+   			}
+  		} 
+  	}
+ }
+
+RESULT(v[0] )
+
+
+EQUATION("Absolute_minTox_P2")
+/*
+valeur de Tox la plus faible jusqu'a present pour le produit 2
+*/
+
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+ 
+v[0]=VL("Absolute_minTox_P2",1);
+
+CYCLE(cur, "Firm")
+ {
+ 	v[5]=VS(cur,"Portfolio");
+ 	if(v[5]!=0)//si produit 2 adopte
+ 	{
+ 		CYCLES(cur, cur1, "Product")
+  		{
+  			v[7]=VS(cur1,"IdProduct");
+  			if(v[7]==2)
+  			{			
+  				v[2]=VS(cur1,"Tox");
+   				if(v[2]<v[0])
+   				v[0]=v[2];
+   			}
+  		} 
+  	}
+ }
+
+RESULT(v[0] )
+
+
+EQUATION("Absolute_minBio_P2")
+/*
+valeur de Bio la plus faible jusqu'a present pour le produit 2
+*/
+
+CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+ {
+  VS(cur,"Innovation");
+ }
+ 
+v[0]=VL("Absolute_minBio_P2",1);
+
+CYCLE(cur, "Firm")
+ {
+ 	v[5]=VS(cur,"Portfolio");
+ 	if(v[5]!=0)//si produit 2 adopte
+ 	{
+ 		CYCLES(cur, cur1, "Product")
+  		{
+  			v[7]=VS(cur1,"IdProduct");
+  			if(v[7]==2)
+  			{			
+  				v[2]=VS(cur1,"Bio");
+   				if(v[2]<v[0])
+   				v[0]=v[2];
+   			}
+  		} 
+  	}
+ }
+
+RESULT(v[0] )
+
+
+/*EQUATIONS REGLEMENTATION*/
+
+EQUATION("Regulation")
+/*
+0 si non appliquee, 1 si appliquee (= T1 est interdite)
+*/
+v[0]=V("Sunset_Date");
+v[1]=V("Revision_Period");
+
+if(t==(v[0]+v[1]))
+{	
+	v[2]=VL("Average_Eff_T2",1);
+	v[3]=VL("Average_X_T2",1);
+	v[4]=V("Target_Eff");
+	v[5]=V("Target_X");
+
+	if(v[2]>=v[4]&&v[3]>=v[5])//si les seuils sont satisfaits on interdit le produit 1
+	{
+		v[6]=1;
+		WRITE("ExitP1_Date",t);// enregistre la periode a laquelle le produit 1 est interdit
+		PARAMETER;
+	}
+	else
+	{
+		v[6]=0;
+		v[7]=V("Revision_Period_Update");// mise a jour de la periode de revision
+		INCR("Revision_Period",v[7]);
+	}
+}
+else
+v[6]=0;
+
+RESULT( v[6])
+
+
+/*EQUATIONS D'INITIALISATION*/
+
+
+EQUATION("EndTrade")
+/*
+S'assure que chaque client a effectu? son processus d'achat
+*/
+CYCLE(cur, "Customer")
+ VS(cur,"ProdUsed");
+
+RESULT( 1)
+
+
+EQUATION("InitTrade")
+/*
+Initialise la valeur des attributs des firmes au d?but de chaque p?riode
+*/
+
+CYCLE(cur, "Firm")
+ { 
+ 	WRITES(cur,"NewFirm",0);
+  WRITES(cur,"Sales",0);
+   CYCLES(cur,cur1, "Product")
+    {
+     WRITES(cur1,"Sales_Prod",0);
+    }
+}
+
+V("Enter");//on lance le processus d'entree
+V("Create");//on cree les objets Product_Purchase de l'entrant
+
+
+RESULT(1 )
+
+
+EQUATION("Total_Customers")
+/*
+compte le nb de clients
+*/
+v[1]=0;
+CYCLE(cur, "Customer")
+ {
+  v[0]=VS(cur,"ProdUsed");
+  if(v[0]!=0)//si le client a un produit
+  v[1]=v[1]+1;
+ }
+ 
+if(v[1]<200)
+INCR("Low_Demand_Time",1);//etendue temporelle de la baisse du nb de clients
+
+RESULT( v[1])
+
+
+
+EQUATION("Reservation_Price")
+/*
+prix de reserve des clients!!!! A MODIFIER
+*/
+
+v[0]=UNIFORM(97,715);
+
+PARAMETER;
+
+RESULT( v[0])
+
+
+
+EQUATION("Reservation_X")
+/*
+seuil d'exigence min de X des clients
+*/
+
+v[0]=UNIFORM(3,9);
+PARAMETER;
+
+RESULT( v[0])
+
+
+
+EQUATION("a")
+/*
+
+*/
+v[0]=UNIFORM(0,1);
+PARAMETER;
+
+RESULT( v[0])
+
+
+EQUATION("b")
+/*
+
+*/
+v[0]=UNIFORM(0,1);
+PARAMETER;
+
+RESULT( v[0])
+
+
+EQUATION("c")
+/*
+
+*/
+v[0]=UNIFORM(0,1);
+PARAMETER;
+
+RESULT( v[0])
+
+
+EQUATION("d")
+/*
+
+*/
+
+v[0]=UNIFORM(0,1);
+PARAMETER;
+
+RESULT( v[0])
+
+
+EQUATION("e")
+/*
+
+*/
+
+v[0]=UNIFORM(0.05,0.05);
+PARAMETER;
+
+RESULT( v[0])
+
+
+
+EQUATION("RD_Split_Index")
+/*
+Part de la R&D affectée a T1 sans tenir compte de la reglementation
+*/
+
+v[0]=UNIFORM(0,1);
+PARAMETER;
+
+RESULT( v[0])
+
+
+
+EQUATION("RD_Split")
+/*
+Part de la R&D affectée a T1 en tenant compte de la reglementation
+*/
+
+v[1]=V("RD_Split_Index");
+v[2]=V("Alpha_Regu");
+v[3]=V("Sunset_Date");
+v[6]=V("Revision_Period");
+
+
+v[0]=v[1]*(1-v[2]*t/(v[3]+v[6]));
+
+RESULT( v[0])
+
+
+
+EQUATION("Adoption_Threshold_MS")//!!!!
+/*
+
+*/
+
+v[0]=UNIFORM(-1,1);//!!!!!!!
+PARAMETER;
+
+RESULT( v[0])
+
+
+EQUATION("Adoption_Threshold_K")//!!!!
+/*
+
+*/
+
+v[0]=UNIFORM(0,1);
+PARAMETER;
+
+RESULT( v[0])
+
+
+EQUATION("Threshold_Abandon")
+/*
+seuil de part du produit 2 dans le CA a atteindre pour abandonner le produit 1
+*/
+
+v[0]=UNIFORM(0.5,1);
+PARAMETER;
+
+RESULT( v[0])
+
+
+
+
+
+
+
+EQUATION("Alpha_Regu_Customers")
+/*
+parametre de credibite de la reglementation aux yeux des clients
+*/
+v[0]=V("Benchmark");//controle si la configuration est le benchmark ou pas
+if(v[0]==1)
+v[1]=0;
+else
+v[1]=UNIFORM(0,1);
+PARAMETER;
+
+RESULT(v[1] )
+
+
+EQUATION("Alpha_Regu")
+/*
+parametre de credibite de la reglementation aux yeux des firmes
+*/
+v[0]=V("Benchmark");//controle si la configuration est le benchmark ou pas
+if(v[0]==1)
+v[1]=0;
+else
+v[1]=UNIFORM(0,1);
+PARAMETER;
+
+RESULT(v[1] )
+
+
+MODELEND
+
+// **Définition globale de la fonction fun**
+double fun(object *caller) {
+    srand(time(nullptr));
+    model.initializeFirms();
+    model.initializeHouseholds();
+    model.displayHouseholds();
+
+    return 0;
+}
+
+
+
+
+/*
+int main() {
+    srand(time(NULL));
+
+    for (int i = 0; i < numFirms; ++i) {
+        firms[i].sector = sectors[i % 6];
+    }
+
+    initializeHouseholds();
+
+    for (int i = 0; i < 10; ++i) {
+        std::cout << "Household " << i
+                  << " -> Status: " << households[i].status
+                  << ", Sector: " << sectors[households[i].assignedSector]
+                  << ", Salary: " << households[i].salary << "\n";
+    }
+
+    return 0;
+}
+*/
+
+
+void close_sim(void)
+{
+
+}
+
+
+
+
