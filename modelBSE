@@ -4,16 +4,16 @@
 #include <cstdlib>
 #include <ctime>
 
-#define WRITE(X, Y) (p->write((char*) X, Y, t))
 
 const int numHouseholds = 100;
-const int numFirms = 100;
+const int numFirms = 50;
 const char* sectors[] = { "Agriculture", "Energy", "Housing", "Transport", "Industry", "Technology" };
 
 struct Household {
     int status;
     int assignedSector;
     double salary = 0.0;
+    int IdFirm = -1;  // L'identifiant de la firme, -1 signifie qu'il n'a pas encore d'employeur
 };
 
 struct Firm {
@@ -42,16 +42,19 @@ public:
             if (randValue < 0.3) {
                 households[i].status = 0;
                 households[i].salary = 0.0;
+                households[i].IdFirm = -1; // Pas de firme assignée
             } else if (randValue < 0.7) {
                 households[i].status = 1;
                 int firmIndex = rand() % numFirms;
                 households[i].salary = firms[firmIndex].salaryBrown;
                 households[i].assignedSector = rand() % 6;
+                households[i].IdFirm = firmIndex; // Assigner l'ID de la firme
             } else {
                 households[i].status = 2;
                 int firmIndex = rand() % numFirms;
                 households[i].salary = firms[firmIndex].salaryGreen;
                 households[i].assignedSector = rand() % 6;
+                households[i].IdFirm = firmIndex; // Assigner l'ID de la firme
             }
         }
     }
@@ -60,15 +63,23 @@ public:
         for (int i = 0; i < 10; ++i) {
             std::cout << "Household " << i << " | Status: " << households[i].status
                       << " | Sector Assigned: " << households[i].assignedSector
-                      << " | Salary: " << households[i].salary << std::endl;
+                      << " | Salary: " << households[i].salary
+                      << " | Firm ID: " << households[i].IdFirm << std::endl;
         }
     }
 };
 
 Model model;
 
+
+
 MODELBEGIN
 
+    // Initialisation du modèle
+
+    model.initializeFirms();
+    model.initializeHouseholds();
+    model.displayHouseholds();
 
 
 
@@ -88,7 +99,7 @@ v[0] = V("UnemploymentBenefit");  // Allocation chômage fixe
 v[1] = V("PropensityToConsume");  // Propension marginale à consommer
 v[2] = V("BaseConsumption");      // Niveau de consommation minimum
 v[3] = V("Status");               // Statut du ménage : 0, 1 ou 2
-v[4] = V("Salary");               // Salaire individuel du ménage (0 si chômage)
+v[4] = V("IndividualSalary");               // Salaire individuel du ménage (0 si chômage)
 
 // Détermination de la consommation en fonction du statut
 switch (static_cast<int>(v[3])) { 
@@ -1154,6 +1165,316 @@ v[2] = v[1] * 0.1;
 WRITE((std::string("households[i]_Salary")).c_str(), v[2]); 
 
 RESULT(v[2])
+
+
+
+
+
+/*EQUATIONS RELATIVES AUX BANQUES*/
+
+
+
+
+EQUATION("DepositInterestRate")
+/*
+Taux d'intérêt sur les dépôts selon les hypothèses post-keynésiennes:
+- Taux directeur de la banque centrale,
+- Part de marché de la banque,
+- Risque de crédit (exposition aux défauts),
+- Taux de réserve obligatoire,
+- Préférence pour la liquidité dans le secteur bancaire.
+*/
+
+v[0] = V("CentralBankRate");           // Taux directeur de la banque centrale (i_CB)
+v[1] = V("MarketShareBank");           // Part de marché de la banque
+v[2] = V("CreditRisk");                // Risque de crédit (variable entre 0 et 1)
+v[3] = V("ReserveRequirement");        // Taux de réserve obligatoire (variable entre 0 et 1)
+v[4] = V("LiquidityPreference");       // Préférence pour la liquidité (variable entre 0 et 1)
+v[5] = V("BaseMarkup");                // Mark-up de base (ajusté par le risque de crédit et la part de marché)
+
+v[6] = v[0] + (v[1] * v[5]) - (v[2] * 0.1) - (v[3] * 0.2) + (v[4] * 0.15);  // Calcul du taux d'intérêt sur les dépôts
+
+RESULT(v[6])
+
+
+
+
+EQUATION("LoanInterestRate")
+/*
+Calculate the loan interest rate based on:
+- Central bank interest rate,
+- A mark-up depending on the bank's market share,
+- A factor reflecting the credit constraint.
+*/
+
+v[0] = V("CentralBankRate");        // Central bank interest rate (i_BC)
+v[1] = V("MarketShareBank");        // Bank's market share (as a fraction between 0 and 1)
+v[2] = V("CreditConstraintInt");       // Credit constraint (value between 0 and 1)
+v[3] = V("BaseMarkup");             // Base mark-up for market share impact (e.g., 0.02), représente l'effet maximum de la part de marché et de la contrainte sur le taux
+
+v[4] = v[3] * v[1];                 // Mark-up proportional to market share
+v[5] = v[0] + v[4] + v[2] * v[3];   // Final loan interest rate
+
+RESULT(v[5])
+
+
+EQUATION("GreenLoanInterestRate")
+/*
+Calcul du taux d'intérêt sur les prêts verts :
+- Taux directeur de la banque centrale,
+- Mark-up basé sur la part de marché de la banque,
+- Facteur de contrainte de crédit,
+- Facteur spécifique pour les prêts verts (réduction de taux d'intérêt).
+*/
+
+v[0] = V("CentralBankRate");           // Taux directeur de la banque centrale (i_CB)
+v[1] = V("MarketShareBank");           // Part de marché de la banque
+v[2] = V("CreditConstraint");          // Contrainte de crédit (valeur entre 0 et 1)
+v[3] = V("BaseMarkup");                // Mark-up de base pour l'impact de la part de marché
+v[4] = v[3] * v[1];                   // Mark-up proportionnel à la part de marché
+v[5] = V("GreenLoanFactor");           // Facteur spécifique aux prêts verts (réduction du taux)
+v[6] = v[0] + v[4] + v[2] * v[3] - v[5];  // Calcul du taux d'intérêt pour les prêts verts
+
+RESULT(v[6])
+
+
+
+EQUATION("MarketShareBank")
+/*
+Calculate the market share of a bank based on its total loans compared to the total loans in the system.
+*/
+
+v[0] = V("BankLoans");              // Total loans granted by the current bank
+v[1] = SUM("BankLoans");            // Total loans granted by all banks
+
+v[2] = (v[1] > 0) ? v[0] / v[1] : 0; // Market share as a fraction (0 if no loans in the system)
+
+RESULT(v[2])
+
+
+
+EQUATION("CreditConstraintVar")
+/*
+Calculation of credit constraint based on the difference between firm's leverage and target leverage.
+The result is normalized to fall between 0 and 1.
+*/
+
+v[0] = V("LeverageFirm");         // Current leverage of the firm
+v[1] = V("TargetLeverage");       // Target leverage set by banks
+v[2] = V("MaxLeverageDifference"); // Maximum allowed difference between leverages (for normalization)
+
+v[3] = v[0] - v[1];               // Difference between observed and target leverage
+v[4] = (v[3] / v[2] < 0) ? 0 : (v[3] / v[2] > 1) ? 1 : v[3] / v[2];  // Normalize difference to the range [0, 1]
+
+RESULT(v[4])
+
+
+
+EQUATION("CreditConstraintInt")
+/*
+Calculation of credit constraint based on the difference between firm's leverage and target leverage.
+The result is normalized to fall between 0 and 1.
+*/
+
+v[0] = V("LeverageFirm");         // Current leverage of the firm
+v[1] = V("TargetLeverage");       // Target leverage set by banks
+v[2] = V("MaxLeverageDifference"); // Maximum allowed difference between leverages (for normalization)
+
+v[3] = v[0] - v[1];               // Difference between observed and target leverage
+v[4] = (v[3] / v[2] < 0) ? 0 : (v[3] / v[2] > 1) ? 1 : v[3] / v[2];  // Normalize difference to the range [0, 1]
+
+RESULT(v[4])
+
+
+
+EQUATION("FirmBankSelection")
+/*
+Processus de sélection des banques par la firme basé sur le taux d'intérêt :
+1. La firme garde la même banque si le taux d'intérêt est inférieur au taux moyen du marché.
+2. Si la firme n'est pas satisfaite, elle choisit une nouvelle banque aléatoire avec un taux inférieur au taux moyen du marché.
+3. Si la firme n'est pas satisfaite de la première banque, elle accepte la deuxième banque quelle que soit son offre.
+*/
+
+v[0] = V("PreviousBank");            // Banque utilisée précédemment
+v[1] = V("InterestRatePreviousBank"); // Taux d'intérêt de la banque précédente
+v[2] = V("MarketInterestRate");      // Taux d'intérêt moyen du marché
+v[3] = 0;                            // Variable pour stocker la banque choisie
+v[4] = -1;                           // Indicateur si une banque a été trouvée
+v[5] = 0;                            // Compteur pour itérer sur les banques disponibles
+
+// Boucle pour itérer sur les banques disponibles
+for (int i = 0; i < v[6]; i++) {
+    v[7] = V("InterestRate");  // Récupérer le taux d'intérêt de la banque en cours (une seule variable dans V)
+
+    // Si le taux d'intérêt est inférieur au taux moyen du marché
+    if (v[7] < v[2]) {
+        // Si aucune banque n'a été encore choisie
+        if (v[4] == -1) {
+            v[3] = i;  // Choisir cette banque
+        }
+    } else {
+        v[4] = v[4];  // Si le taux d'intérêt est trop élevé, continuer à chercher
+    }
+
+    v[5] = v[5] + 1;             // Incrémenter le compteur de banques
+}
+
+// Si aucune banque n'a été trouvée avec un taux inférieur au taux moyen
+if (v[4] == -1) {
+    v[3] = V("BackupBank");      // Choisir une banque de secours
+} else {
+    v[3] = v[3];                 // Sinon, garder la banque choisie
+}
+
+RESULT(v[3])                      // Retourner la banque choisie
+
+
+EQUATION("HouseholdBankDecision")
+/*
+Processus de décision du ménage pour changer de banque :
+1. Le ménage conserve sa banque actuelle si les conditions suivantes ne sont pas remplies :
+   - Le taux d'intérêt sur les dépôts de la nouvelle banque est supérieur à celui de la banque actuelle.
+   - Le ratio d'actifs verts (green asset ratio) de la nouvelle banque est supérieur à celui de la banque actuelle.
+2. Si les deux conditions sont remplies, le ménage change de banque.
+*/
+
+v[0] = V("InitialBank");              // Banque initiale du ménage
+v[1] = V("CurrentDepositRate");        // Taux d'intérêt actuel sur les dépôts du ménage
+v[2] = V("CurrentGreenAssetRatio");    // Green Asset Ratio actuel de la banque du ménage
+v[3] = -1;                            // Variable pour stocker la banque choisie
+v[4] = 0;                             // Compteur pour itérer sur les banques disponibles
+
+// Boucle pour itérer sur les banques disponibles
+for (int i = 0; i < v[5]; i++) {
+    // Accéder aux taux et aux ratios pour chaque banque avec des indices numériques
+    v[6] = V("DepositRate_" + i);   // Taux d'intérêt sur les dépôts de la banque en cours
+    v[7] = V("GreenAssetRatio_" + i); // Green Asset Ratio de la banque en cours
+
+    // Vérification des conditions pour changer de banque
+    if (v[6] > v[1] && v[7] > v[2]) {  // Si le taux de dépôt est supérieur et le green asset ratio est meilleur
+        if (v[3] == -1) {               // Si aucune banque n'a été encore choisie
+            v[3] = i;                   // Changer de banque
+        }
+    } else {
+        v[3] = v[3];                    // Rester avec la banque actuelle
+    }
+
+    v[4] = v[4] + 1;                   // Incrémenter le compteur de banques
+}
+
+// Si aucune banque n'a été trouvée avec un taux de dépôt et un green asset ratio meilleurs
+if (v[3] == -1) {
+    v[3] = v[0];                       // Garder la banque initiale si aucune banque meilleure n'est trouvée
+} else {
+    v[3] = v[3];                       // Sinon, garder la banque choisie
+}
+
+RESULT(v[3])                            // Retourner la banque choisie
+
+
+
+EQUATION("BankProfit")
+/*
+Calcul du profit de la banque en fonction des intérêts perçus sur les prêts verts, les prêts bruns,
+et des intérêts payés sur les dépôts.
+*/
+
+v[0] = V("LoanRateGreen");   // Taux d'intérêt des prêts verts
+v[1] = V("LoanRateBrown");   // Taux d'intérêt des prêts bruns
+v[2] = V("LoanAmountGreen"); // Montant total des prêts verts
+v[3] = V("LoanAmountBrown"); // Montant total des prêts bruns
+v[4] = V("DepositAmount");   // Montant total des dépôts
+v[5] = V("DepositRate");     // Taux d'intérêt payé sur les dépôts
+v[6] = V("LoanRateCons");
+v[7] = V("LoanAmountCons");
+
+// Calcul des intérêts perçus sur les prêts verts et bruns, moins les intérêts payés sur les dépôts
+v[6] = (v[0] * v[2]) + (v[1] * v[3]) + (v[6] * v[7]) - (v[5] * v[4]); // Profit net de la banque
+
+RESULT(v[6]);  // Retourner le profit net de la banque
+
+
+
+EQUATION("ConsumerCreditRisk")
+/*
+Modélisation normalisée du risque financier d'un ménage emprunteur dans le cadre d'un crédit à la consommation.
+1. Calcul de la mensualité basée sur le montant emprunté, le taux d'intérêt et la durée du crédit.
+2. Calcul du taux d'endettement.
+3. Calcul de l'indicateur de solvabilité.
+4. Calcul de la probabilité de défaut en fonction du taux d'endettement.
+5. Normalisation du risque financier total pour la banque pour le ramener à un intervalle [0, 1].
+*/
+
+v[0] = V("LoanAmount");            // Montant du crédit à la consommation (C)
+v[1] = V("InterestRate");          // Taux d'intérêt du crédit (r)
+v[2] = V("CreditDuration");        // Durée du crédit en mois (T)
+v[3] = V("Income");                // Revenu du ménage (Y)
+v[4] = V("TotalDebt");             // Dette totale du ménage (D)
+
+// Calcul de la mensualité du crédit à la consommation
+v[5] = v[0] * v[1] / (1 - pow(1 + v[1], -v[2]));  // Formule d'amortissement du crédit
+
+// Calcul du taux d'endettement (E)
+v[6] = v[4] / v[3];               // Taux d'endettement : D / Y
+
+// Calcul de l'indicateur de solvabilité (I)
+v[7] = v[3] - v[4];               // Solvabilité : Y - D
+
+// Calcul de la probabilité de défaut (p_d) basée sur le taux d'endettement
+v[8] = v[6] / (1 + v[6]);         // Probabilité de défaut : E / (1 + E)
+
+// Normalisation du risque financier total
+v[9] = v[8] * v[5];               // Risque financier total : p_d * M
+
+// Normalisation pour obtenir un résultat compris entre 0 et 1
+v[10] = v[9] / (V("MaxRiskValue"));  // Diviser par une valeur maximale théorique de risque
+
+RESULT(v[10])                      // Retourner le risque financier normalisé
+
+
+
+EQUATION("MaxRiskValue")
+/*
+Calcul du risque financier maximal pour un ménage emprunteur dans le cadre d'un crédit à la consommation.
+La valeur de risque est fonction de la mensualité maximale et de la probabilité de défaut maximale.
+*/
+
+v[11] = V("MaxLoanAmount");            // Montant maximal du crédit à la consommation (C_max)
+v[12] = V("MaxInterestRate");          // Taux d'intérêt maximal (r_max)
+v[13] = V("MinCreditDuration");        // Durée minimale du crédit (T_min) (en mois)
+
+v[14] = v[11] * v[12] / (1 - pow(1 + v[12], -v[13]));  // Calcul de la mensualité maximale (M_max)
+
+// Maximum du taux d'endettement (E_max), supposé être 1 dans le pire scénario
+v[15] = 1;  // Taux d'endettement maximal (E_max) = 1 (100%)
+
+// Maximum de la probabilité de défaut (p_d_max), supposée être 1 pour un ménage avec un taux d'endettement maximal
+v[16] = v[15] / (1 + v[15]);         // Probabilité de défaut maximale (p_d_max)
+
+// Calcul du risque financier maximal (MaxRiskValue)
+v[17] = v[16] * v[14];               // Risque financier maximal : p_d_max * M_max
+
+RESULT(v[17])                         // Retourner la valeur maximale du risque
+
+
+
+EQUATION("ConsumerLoanBankSelection")
+/*
+Le ménage choisit toujours la banque qu'il a choisie pour ses dépôts pour prendre son crédit à la consommation.
+*/
+
+v[0] = V("DepositBank");            // Banque choisie par le ménage pour ses dépôts
+v[1] = V("PreviousLoanBank");      // Banque utilisée précédemment pour le crédit à la consommation
+v[2] = -1;                         // Indicateur pour la banque à choisir
+
+// Si la banque actuelle du ménage pour ses dépôts est différente de la banque utilisée pour les crédits
+if (v[0] != v[1]) {
+    v[2] = v[0];  // Le ménage prend un crédit auprès de la banque où il a son dépôt
+} else {
+    v[2] = v[1];  // Sinon, il reste avec la banque qu'il avait précédemment pour son crédit à la consommation
+}
+
+RESULT(v[2])                      // Retourner la banque choisie pour le crédit à la consommation
 
 
 
@@ -3822,13 +4143,26 @@ RESULT(v[1] )
 MODELEND
 
 // **Définition globale de la fonction fun**
-double fun(object *caller) {
+/*double fun(object *caller) {
     srand(time(nullptr));
     model.initializeFirms();
     model.initializeHouseholds();
     model.displayHouseholds();
 
     return 0;
+}*/
+
+
+double fun(object* caller) {  // Fonction de retour double
+    srand(time(nullptr));
+
+    Model model;  // Création de l'instance de Model
+
+    model.initializeFirms();   // Initialisation des firmes
+    model.initializeHouseholds();   // Initialisation des ménages
+    model.displayHouseholds();  // Affichage des ménages
+
+    return 0.0;  // Retourne un double, par exemple 0.0 ici
 }
 
 
