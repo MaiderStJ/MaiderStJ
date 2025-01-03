@@ -550,7 +550,7 @@ v[3]=v[33]/v[34];
 
 v[4]=VLS(c,"ProdUsed",1);
 v[5]=VS(c,"Product_Type");
-v[22]=VS(c,"Alpha_Regu_Customers");
+v[22]=VS(c,"Alpha_Regu_Households");
 
 
 if(v[4]==0)//si le client n'a pas de produit : pas de rachat possible
@@ -718,7 +718,7 @@ v[3]=v[43]/v[44];
 v[4]=VS(c,"e");
 v[30]=VS(c,"Reservation_Price");
 v[31]=VS(c,"Reservation_X");
-v[34]=VS(c,"Alpha_Regu_Customers");
+v[34]=VS(c,"Alpha_Regu_Households");
 v[22]=V("A");//pour X
 v[23]=V("B");//pour Price
 v[24]=V("C");//pour Tox
@@ -845,7 +845,7 @@ CYCLE(cur, "Product_Purchase")// calcul l'utilite de chaque produit en retenant 
 
 if(v[27]==0)//si les utilites sont toutes nulles
 {
-	WRITES(c,"Product_Type",0);// inscrit le type de produit achete dans l'objet customer
+	WRITES(c,"Product_Type",0);// inscrit le type de produit achete dans l'objet Household
 	END_EQUATION(0);
 }
 
@@ -853,7 +853,7 @@ cur=RNDDRAW("Product_Purchase","Utility");//choisit le produit avec tirage aleat
 
 v[11]=VS(cur,"IdFirm_Purchase");// recupere l'identifiant de la firme choisie
 v[12]=VS(cur,"IdProduct_Purchase");// recupere le type de produit choisi
-WRITES(c,"Product_Type",v[12]);// inscrit le type de produit achete dans l'objet customer
+WRITES(c,"Product_Type",v[12]);// inscrit le type de produit achete dans l'objet Household
 
 
 CYCLE(cur1, "Firm")
@@ -1170,24 +1170,24 @@ RESULT(v[18] + v[19])
 
 
 
-EQUATION("LaborMarketMatching")
+EQUATION("Status")
 /*
-Équation qui relie l'offre et la demande de travail sur le marché, prenant en compte les coûts d'ajustement, les transitions, et le chômage involontaire.
+Équation qui met à jour le statut des ménages en fonction des conditions du marché du travail,
+en tenant compte des préférences pour les emplois verts et bruns, ainsi que de la disponibilité des emplois.
 */
 
-// Initialisation des paramètres sectoriels et individuels
-v[0] = V((std::string(sectors[i]) + "_WageGreen").c_str());  
-v[1] = V((std::string(sectors[i]) + "_WageBrown").c_str());  
+v[0] = V((std::string(sectors[i]) + "_WageGreen").c_str());  // Salaire des emplois verts
+v[1] = V((std::string(sectors[i]) + "_WageBrown").c_str());  // Salaire des emplois bruns
 v[2] = V("RequalificationCost");                // Coût individuel pour la reconversion  
 v[3] = V("MobilityFactor");                     // Coût de mobilité individuelle  
 v[4] = V("UnemploymentRate");                   // Taux global de chômage  
-v[5] = V((std::string(sectors[i]) + "_GreenLaborDemand").c_str());  // Demande individuelle d'emplois verts  
-v[6] = V((std::string(sectors[i]) + "_BrownLaborDemand").c_str());  // Demande individuelle d'emplois bruns  
+v[5] = V((std::string(sectors[i]) + "_GreenLaborDemand").c_str());  // Demande d'emplois verts  
+v[6] = V((std::string(sectors[i]) + "_BrownLaborDemand").c_str());  // Demande d'emplois bruns  
 v[7] = V("WorkerTransitionRate");               // Taux de transition des travailleurs  
 v[8] = V("FrictionalUnemployment");             // Chômage frictionnel  
 v[9] = V("PolicySubsidy");                     // Subvention politique
 
-// Boucle sur les ménages cherchant du travail
+// Boucle sur les ménages
 CYCLE(cur, "Households") {
     v[10] = VLS(cur, "GreenJobPreference", 1);  // Préférence pour les emplois verts  
     v[11] = VLS(cur, "BrownJobPreference", 1);  // Préférence pour les emplois bruns  
@@ -1198,16 +1198,16 @@ CYCLE(cur, "Households") {
 
     // Calcul des attractivités des emplois verts et bruns
     v[15] = v[0] - v[12] - v[2] + v[9] - v[13];  // Attractivité des emplois verts  
-    v[16] = (v[15] > 0) ? v[15] * v[10] : 0;    // Contribution des offres individuelles aux emplois verts  
+    v[16] = (v[15] > 0) ? v[15] * v[10] : 0;    // Contribution individuelle aux emplois verts  
 
     v[17] = v[1] - v[12] - v[13];              // Attractivité des emplois bruns  
-    v[18] = (v[17] > 0) ? v[17] * v[11] : 0;   // Contribution des offres individuelles aux emplois bruns  
+    v[18] = (v[17] > 0) ? v[17] * v[11] : 0;   // Contribution individuelle aux emplois bruns  
 
     // Mise à jour des valeurs individuelles d'offre  
     WRITE("OfferedGreenLaborMicro", v[16]);
     WRITE("OfferedBrownLaborMicro", v[18]);
 
-    // Mise à jour du statut en fonction des conditions du marché du travail
+    // Mise à jour du statut du ménage
     if (v[14] == 0) {  // Si le ménage est au chômage
         if (v[16] > 0 || v[18] > 0) {  // Si des emplois sont disponibles
             v[14] = (rand() % 2 == 0) ? 1 : 2;  // Transition vers emploi vert ou brun
@@ -1220,23 +1220,12 @@ CYCLE(cur, "Households") {
     WRITE("Status", v[14]);  // Sauvegarder le nouveau statut
 }
 
-// Agrégation des offres individuelles des ménages
-v[19] = SUM("OfferedGreenLaborMicro");        // Total des offres individuelles pour le travail vert  
-v[20] = SUM("OfferedBrownLaborMicro");        // Total des offres individuelles pour le travail brun  
-
-// Agrégation des demandes des firmes
-v[21] = V((std::string(sectors[i]) + "_OfferedGreenLabor").c_str());  
-v[22] = V((std::string(sectors[i]) + "_OfferedBrownLabor").c_str());  
-
-// Calcul du chômage involontaire
-v[23] = v[4] + v[8] - (v[19] + v[20]);
-WRITE((std::string(sectors[i]) + "_InvoluntaryUnemployment").c_str(), v[23]);
+// Résultats finaux : Total des offres d'emploi vert et brun
+v[19] = SUM("OfferedGreenLaborMicro");        // Total des offres d'emplois verts  
+v[20] = SUM("OfferedBrownLaborMicro");        // Total des offres d'emplois bruns  
 
 // Retour des résultats
 RESULT(v[19] + v[20]);
-
-
-
 
 
 
@@ -1611,6 +1600,297 @@ if (v[0] != v[1]) {
 
 RESULT(v[2])                      // Retourner la banque choisie pour le crédit à la consommation
 
+
+
+
+
+/*EQUATIONS RELATIVES A LA NATURE*/
+
+
+
+// Déclaration des équations
+
+EQUATION("Ener")
+    v[0] = V("epsilon");    // epsilon
+    v[1] = V("Y");          // Y
+    
+    v[2] = v[0] * v[1];     // Calcul de Ener
+    RESULT(v[2])
+
+EQUATION("ER")
+    v[0] = V("rensh");      // rensh
+    v[1] = V("Ener");       // Ener
+    
+    v[2] = v[0] * v[1];     // Calcul de ER
+    RESULT(v[2])
+
+EQUATION("rensh")
+    v[0] = V("K_V(-1)");    // K_V(-1)
+    v[1] = V("K_B(-1)");    // K_B(-1)
+    
+    v[2] = 1 + (1 / (M_PI * (v[0] / v[1])));  // Calcul de rensh
+    v[3] = pow(v[2], -1);  // Inverse de la valeur
+    
+    RESULT(v[3])
+
+EQUATION("EN")
+    v[0] = V("Ener");       // Ener
+    v[1] = V("ER");         // ER
+    
+    v[2] = v[0] - v[1];     // Calcul de EN
+    RESULT(v[2])
+
+EQUATION("EMIS_EN")
+    v[0] = V("emisen");     // emisen
+    v[1] = V("emish");      // emish
+    v[2] = V("EN");         // EN
+    
+    v[3] = (v[0] > 0) * (v[1] * v[2]) + (v[0] < 0) * 0;  // Calcul de EMIS_EN
+    RESULT(v[3])
+
+EQUATION("emisen")
+    v[0] = V("emish");      // emish
+    v[1] = V("EN");         // EN
+    
+    v[2] = v[0] * v[1];     // Calcul de emisen
+    RESULT(v[2])
+
+EQUATION("REV_E")
+    v[0] = V("REV_E_var");  // REV_E_var
+    
+    RESULT(v[0])
+
+EQUATION("REV_E_var")
+    v[0] = V("REV_E(-1)");  // REV_E(-1)
+    v[1] = V("CON_E");      // CON_E
+    v[2] = V("EN");         // EN
+    
+    v[3] = (v[0] > 2000) * (v[0] + v[1] - v[2]) + (v[0] < 2000) * 1;  // Calcul de REV_E_var
+    RESULT(v[3])
+
+EQUATION("CON_E")
+    v[0] = V("cons_E");     // cons_E
+    v[1] = V("RES_E(-1)");  // RES_E(-1)
+    
+    v[2] = v[0] * v[1];     // Calcul de CON_E
+    RESULT(v[2])
+
+EQUATION("RES_E")
+    v[0] = V("RES_E(-1)");  // RES_E(-1)
+    v[1] = V("CON_E");      // CON_E
+    
+    v[2] = v[0] - v[1];     // Calcul de RES_E
+    RESULT(v[2])
+
+EQUATION("dep_E")
+    v[0] = V("EN");         // EN
+    v[1] = V("REV_E(-1)");  // REV_E(-1)
+    
+    v[2] = v[0] / v[1];     // Calcul de dep_E
+    RESULT(v[2])
+
+EQUATION("EMIS_L")
+    v[0] = V("EMIS_L(-1)"); // EMIS_L(-1)
+    v[1] = V("landusech");  // landusech
+    
+    v[2] = v[0] * (1 - v[1]);  // Calcul de EMIS_L
+    RESULT(v[2])
+
+EQUATION("EMIS")
+    v[0] = V("EMIS_EN");    // EMIS_EN
+    v[1] = V("EMIS_L");     // EMIS_L
+    
+    v[2] = v[0] + v[1];     // Calcul de EMIS
+    RESULT(v[2])
+
+EQUATION("CO2_AT")
+    v[0] = V("EMIS");       // EMIS
+    v[1] = V("phi_11");     // phi_11
+    v[2] = V("CO2_AT(-1)"); // CO2_AT(-1)
+    v[3] = V("phi_21");     // phi_21
+    v[4] = V("CO2_UP(-1)"); // CO2_UP(-1)
+    
+    v[5] = v[0] + v[1] * v[2] + v[3] * v[4];  // Calcul de CO2_AT
+    RESULT(v[5])
+
+EQUATION("CO2_UP")
+    v[0] = V("phi_12");     // phi_12
+    v[1] = V("CO2_AT(-1)"); // CO2_AT(-1)
+    v[2] = V("phi_22");     // phi_22
+    v[3] = V("CO2_UP(-1)"); // CO2_UP(-1)
+    v[4] = V("phi_32");     // phi_32
+    v[5] = V("CO2_LO(-1)"); // CO2_LO(-1)
+    
+    v[6] = v[0] * v[1] + v[2] * v[3] + v[4] * v[5];  // Calcul de CO2_UP
+    RESULT(v[6])
+
+EQUATION("CO2_LO")
+    v[0] = V("phi_23");     // phi_23
+    v[1] = V("CO2_UP(-1)"); // CO2_UP(-1)
+    v[2] = V("phi_33");     // phi_33
+    v[3] = V("CO2_LO(-1)"); // CO2_LO(-1)
+    
+    v[4] = v[0] * v[1] + v[2] * v[3];  // Calcul de CO2_LO
+    RESULT(v[4])
+
+EQUATION("varlog")
+    v[0] = V("RF_2CO2");    // RF_2CO2
+    v[1] = V("CO2_AT");     // CO2_AT
+    v[2] = V("CO2_ATPRE");  // CO2_ATPRE
+    
+    v[3] = v[0] * (v[1] / v[2]);  // Calcul de varlog
+    RESULT(v[3])
+
+EQUATION("RF")
+    v[0] = V("RF_2CO2");    // RF_2CO2
+    v[1] = V("CO2_AT");     // CO2_AT
+    v[2] = V("CO2_ATPRE");  // CO2_ATPRE
+    
+    v[3] = log(v[0] * (v[1] / v[2])) / log(4);  // Calcul de RF
+    RESULT(v[3])
+
+EQUATION("F_EX")
+    v[0] = V("F_EX(-1)");   // F_EX(-1)
+    v[1] = V("fex");        // fex
+    
+    v[2] = v[0] + v[1];     // Calcul de F_EX
+    RESULT(v[2])
+
+EQUATION("T_AT")
+    v[0] = V("T_AT(-1)");   // T_AT(-1)
+    v[1] = V("RF");         // RF
+    v[2] = V("RF_2CO2");    // RF_2CO2
+    v[3] = V("CS");         // CS
+    v[4] = V("t_1");        // t_1
+    v[5] = V("t_2") ;       // t_2
+    v[6] = V("T_LO(-1)");   // T_LO(-1)
+    
+    v[7] = v[1] - (v[2] / v[3]);   // Calcul de (RF - (RF_2CO2 / CS))
+    v[8] = v[7] * v[0] - v[5] * (v[0] - v[6]);  // Calcul de T_AT
+    v[9] = v[4] * v[8];             // Finalisation de T_AT
+    RESULT(v[9])
+
+EQUATION("T_LO")
+    v[0] = V("T_LO(-1)");   // T_LO(-1)
+    v[1] = V("T_AT(-1)");   // T_AT(-1)
+    v[2] = V("t_3");        // t_3
+    
+    v[3] = v[1] - v[0];     // Calcul de (T_AT(-1) - T_LO(-1))
+    v[4] = v[2] * v[3];     // Calcul de T_LO
+    v[5] = v[0] + v[4];     // Finalisation de T_LO
+    RESULT(v[5])
+
+
+EQUATION("D_T")
+    v[0] = V("eta_1") * V("T_AT") + V("eta_2") * pow(V("T_AT"), 2) + V("eta_3") * pow(V("T_AT"), 6.754);
+    v[1] = 1 + v[0];
+    v[2] = 1 / v[1];
+    RESULT(1 - v[2]);
+
+EQUATION("D_TP")
+    v[0] = V("dampar") * V("D_T");
+    RESULT(v[0]);
+
+EQUATION("D_TF")
+    v[0] = 1 - V("D_T");
+    v[1] = 1 - V("D_TP");
+    v[2] = v[0] / v[1];
+    RESULT(1 - v[2]);
+
+EQUATION("delta")
+    v[0] = V("delta_0");
+    v[1] = 1 - v[0];
+    v[2] = 1 - V("adK");
+    v[3] = V("D_TF(-1)");
+    v[4] = v[1] * v[2] * v[3];
+    RESULT(v[0] + v[4]);
+
+EQUATION("vdam")
+    v[0] = V("vdam(-1)") * (1 + V("gv"));
+    v[1] = 1 - (1 - V("adP")) * V("D_TP(-1)");
+    RESULT(v[0] * v[1]);
+
+// Effet rebond
+
+EQUATION("MY")
+    v[0] = V("mu") * V("Y");
+    RESULT(v[0]);
+
+EQUATION("M")
+    v[0] = V("MY") - V("REC");
+    RESULT(v[0]);
+
+EQUATION("REC")
+    v[0] = V("rho") * V("DEM");
+    RESULT(v[0]);
+
+EQUATION("DEM")
+    v[0] = V("mu") * (V("delta") * V("K(-1)") + V("zig") * V("DC(-1)"));
+    RESULT(v[0]);
+
+EQUATION("DC")
+    v[0] = V("DC(-1)") + V("C_R") + V("C_U") - V("zig") * V("DC(-1)");
+    RESULT(v[0]);
+
+EQUATION("Waste")
+    v[0] = V("M") + V("CEN") + V("O2") - V("EMIS_EN") - (V("SES") - V("SES(-1)"));
+    RESULT(v[0]);
+
+EQUATION("SES")
+    v[0] = V("SES(-1)") + V("MY") - V("DEM");
+    RESULT(v[0]);
+
+EQUATION("CEN")
+    v[0] = V("EMIS_EN") / V("car");
+    RESULT(v[0]);
+
+EQUATION("O2")
+    v[0] = V("EMIS_EN") - V("CEN");
+    RESULT(v[0]);
+
+EQUATION("HWS")
+    v[0] = V("HWS(-1)") + V("haz") * V("W");
+    RESULT(v[0]);
+
+EQUATION("hazratio")
+    v[0] = V("HWS") / V("SURF");
+    RESULT(v[0]);
+
+EQUATION("REV_M")
+    v[0] = V("REV_M_var");
+    RESULT(v[0]);
+
+EQUATION("REV_M_var")
+    v[0] = (V("REV_M(-1)") > 300) * (V("REV_M(-1)") + V("CON_M") - V("M")) + (V("REV_M(-1)") < 300) * 1;
+    RESULT(v[0]);
+
+EQUATION("CON_M")
+    v[0] = V("cons_M") * V("RES_M(-1)");
+    RESULT(v[0]);
+
+EQUATION("RES_M")
+    v[0] = V("RES_M(-1)") - V("CON_M");
+    RESULT(v[0]);
+
+EQUATION("dep_M")
+    v[0] = V("M") / V("REV_M(-1)");
+    RESULT(v[0]);
+
+EQUATION("mu")
+    v[0] = V("greencapratio(-1)") * V("mu_V") + (1 - V("greencapratio(-1)")) * V("mu_B");
+    RESULT(v[0]);
+
+EQUATION("mu_V")
+    v[0] = V("mu_V(-1)") * (1 - V("mu_0V"));
+    RESULT(v[0]);
+
+EQUATION("rho")
+    v[0] = V("greencapratio(-1)") * V("rho_V") + (1 - V("greencapratio(-1)")) * V("rho_B");
+    RESULT(v[0]);
+
+EQUATION("rho_V")
+    v[0] = V("rho_V(-1)") * (1 - V("rho_0V"));
+    RESULT(v[0]);
 
 
 
@@ -2413,9 +2693,9 @@ EQUATION("ms_Product1")
 Part de march? de la technologie 1
 */
 V("EndTrade");
-v[0]=V("Total_Customers");
+v[0]=V("Total_Households");
 v[1]=0;
-CYCLE(cur, "Customer")
+CYCLE(cur, "Household")
  {
   v[2]=VS(cur,"Product_Type");
   if(v[2]==1)
@@ -2433,9 +2713,9 @@ EQUATION("ms_Product2")
 Part de march? de la technologie 2
 */
 V("EndTrade");
-v[0]=V("Total_Customers");
+v[0]=V("Total_Households");
 v[1]=0;
-CYCLE(cur, "Customer")
+CYCLE(cur, "Household")
  {
   v[2]=VS(cur,"Product_Type");
   if(v[2]==2)
@@ -3715,12 +3995,12 @@ v[7]=v[6];
 RESULT(v[7] )
 
 
-EQUATION("Min_TotalCustomers")
+EQUATION("Min_TotalHouseholds")
 /*
 nombre le plus faible de clients atteint au cours de la simu
 */
-v[0]=VL("Min_TotalCustomers",1);
-v[1]=V("Total_Customers");
+v[0]=VL("Min_TotalHouseholds",1);
+v[1]=V("Total_Households");
 if(v[1]<v[0])
 v[2]=v[1];
 else
@@ -4055,7 +4335,7 @@ EQUATION("EndTrade")
 /*
 S'assure que chaque client a effectu? son processus d'achat
 */
-CYCLE(cur, "Customer")
+CYCLE(cur, "Household")
  VS(cur,"ProdUsed");
 
 RESULT( 1)
@@ -4083,12 +4363,12 @@ V("Create");//on cree les objets Product_Purchase de l'entrant
 RESULT(1 )
 
 
-EQUATION("Total_Customers")
+EQUATION("Total_Households")
 /*
 compte le nb de clients
 */
 v[1]=0;
-CYCLE(cur, "Customer")
+CYCLE(cur, "Household")
  {
   v[0]=VS(cur,"ProdUsed");
   if(v[0]!=0)//si le client a un produit
@@ -4247,7 +4527,7 @@ RESULT( v[0])
 
 
 
-EQUATION("Alpha_Regu_Customers")
+EQUATION("Alpha_Regu_Households")
 /*
 parametre de credibite de la reglementation aux yeux des clients
 */
@@ -4329,6 +4609,7 @@ void close_sim(void)
 {
 
 }
+
 
 
 
