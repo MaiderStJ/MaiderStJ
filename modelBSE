@@ -92,29 +92,53 @@ EQUATION("HouseholdConsumption")
 Détermination de la consommation d'un ménage en fonction de son statut d'emploi.
 Les statuts sont représentés par des valeurs numériques :
 0 = Unemployed, 1 = EmployedBrown, 2 = EmployedGreen.
+Inclut FinPosHH comme source de revenus supplémentaires.
 */
+
+
+
 
 // Récupération des variables pertinentes
 v[0] = V("UnemploymentBenefit");  // Allocation chômage fixe
 v[1] = V("PropensityToConsume");  // Propension marginale à consommer
 v[2] = V("BaseConsumption");      // Niveau de consommation minimum
 v[3] = V("Status");               // Statut du ménage : 0, 1 ou 2
-v[4] = V("IndividualSalary");               // Salaire individuel du ménage (0 si chômage)
+v[4] = V("IndividualSalary");     // Salaire individuel du ménage (0 si chômage)
+v[5] = V("FinPosHH");             // Position financière nette du ménage
+v[6] = V("LoanCons");             // Dette de consommation actuelle du ménage
 
 // Détermination de la consommation en fonction du statut
 switch (static_cast<int>(v[3])) { 
     case 0: // Unemployed
-        v[5] = v[0];  // Allocation chômage
+        if ((v[0] + v[5]) < v[2]) { // Revenus (allocation + FinPosHH) insuffisants
+            v[7] = v[2] - (v[0] + v[5]); // Besoin d'endettement
+            v[6] += v[7];                // Augmenter la dette de consommation
+            v[8] = v[2];                 // Consommation au niveau de base
+        } else {
+            v[8] = v[0] + v[5];          // Allocation et FinPosHH suffisants
+        }
         break;
+
     case 1: // EmployedBrown
     case 2: // EmployedGreen
-        v[5] = v[2] + v[1] * v[4];  // Consommation basée sur le salaire
+        if ((v[4] + v[5]) < v[2]) { // Revenus (salaire + FinPosHH) insuffisants
+            v[7] = v[2] - (v[4] + v[5]); // Besoin d'endettement
+            v[6] += v[7];                // Augmenter la dette de consommation
+            v[8] = v[2];                 // Consommation au niveau de base
+        } else {
+            v[8] = v[2] + v[1] * (v[4] + v[5]); // Consommation basée sur les revenus
+        }
         break;
+
     default:
-        v[5] = 0;  // Sécurité : consommation nulle pour un statut inconnu
+        v[8] = 0;  // Sécurité : consommation nulle pour un statut inconnu
 }
 
-RESULT(v[5])
+// Mettre à jour la variable LoanCons pour stocker la nouvelle dette
+WRITE("LoanCons", v[6]);
+
+RESULT(v[8]) // Retourner la consommation calculée
+
 
 
 EQUATION("Yfin")
@@ -122,7 +146,7 @@ EQUATION("Yfin")
 Financial income (interest on deposits)
 */
 
-v[0] = V("IntDep");
+v[0] = V("DepositInterestRate");
 v[1] = VL("S", 1);
 
 v[2] = v[0]*v[1];
@@ -142,6 +166,33 @@ v[2] = VL("Dep", 1);
 v[3] = v[2] + (v[0] - v[1]);
 
 RESULT( v[3])
+
+
+EQUATION("FinPosHH")
+/*
+Revenu disponible
+*/
+
+v[0] = V("Yfin");
+v[1] = VL("TotalDebt", 1);
+v[2] = V("ConsumerCreditRisk");
+
+v[3] = v[0] - (v[1] * v[2]);
+
+RESULT( v[3])
+
+
+EQUATION("TotalDebt")
+/*
+Total Debt of households
+*/
+
+v[0] = VL("LoanCons", 1);
+v[1] = V("LoanCons");
+
+v[2] = v[0] + v[1];
+
+RESULT( v[2])
 
 
 
@@ -222,9 +273,9 @@ v[3] = v[0]*(1+(v[1]-v[2]));
 RESULT( v[3])
 
 
-EQUATION("IrreducibleCons")
+EQUATION("BaseCons")
 /*
-Irreducible consumption.
+Base consumption.
 */
 
 v[0] = V("ConsAg");
@@ -321,6 +372,38 @@ v[1] = V("SuppCons");
 v[2] = v[0]*v[1];
 
 RESULT( v[2])
+
+
+EQUATION("NormalizePreferences")
+/*
+Équation qui normalise les préférences de manière à ce que leur somme soit égale à 1.
+*/
+
+v[0] = V("AgPref");
+v[1] = V("EnerPref");
+v[2] = V("HousPref");
+v[3] = V("TransPref");
+v[4] = V("IndPref");
+v[5] = V("TCPref");
+
+// Calcul de la somme des préférences
+v[6] = v[0] + v[1] + v[2] + v[3] + v[4] + v[5];
+
+// Calcul de l'écart par rapport à 1
+v[7] = 1.0 - v[6];
+
+// Ajustement des préférences pour que la somme soit égale à 1
+WRITE("AgPref", v[0] + v[7] * (v[0] / v[6]));  // Ajuster AgPref
+WRITE("EnerPref", v[1] + v[7] * (v[1] / v[6]));  // Ajuster EnerPref
+WRITE("HousPref", v[2] + v[7] * (v[2] / v[6]));  // Ajuster HousPref
+WRITE("TransPref", v[3] + v[7] * (v[3] / v[6]));  // Ajuster TransPref
+WRITE("IndPref", v[4] + v[7] * (v[4] / v[6]));  // Ajuster IndPref
+WRITE("TCPref", v[5] + v[7] * (v[5] / v[6]));  // Ajuster TCPref
+
+RESULT(0)
+
+
+
 
 EQUATION("ConsAgTot")
 /*
@@ -1111,33 +1194,46 @@ CYCLE(cur, "Households") {
     v[12] = VLS(cur, "TrainingCost", 1);        // Coût individuel de reconversion  
     v[13] = VLS(cur, "RelocationCost", 1);      // Coût de mobilité géographique  
 
-    // Calcul des attractivités des emplois verts et bruns
-    v[14] = v[0] - v[12] - v[2] + v[9] - v[13];  // Attractivité des emplois verts  
-    v[15] = (v[14] > 0) ? v[14] * v[10] : 0;    // Contribution des offres individuelles aux emplois verts  
+    v[14] = VLS(cur, "Status", 1);              // Récupérer le statut actuel du ménage
 
-    v[16] = v[1] - v[12] - v[13];              // Attractivité des emplois bruns  
-    v[17] = (v[16] > 0) ? v[16] * v[11] : 0;   // Contribution des offres individuelles aux emplois bruns  
+    // Calcul des attractivités des emplois verts et bruns
+    v[15] = v[0] - v[12] - v[2] + v[9] - v[13];  // Attractivité des emplois verts  
+    v[16] = (v[15] > 0) ? v[15] * v[10] : 0;    // Contribution des offres individuelles aux emplois verts  
+
+    v[17] = v[1] - v[12] - v[13];              // Attractivité des emplois bruns  
+    v[18] = (v[17] > 0) ? v[17] * v[11] : 0;   // Contribution des offres individuelles aux emplois bruns  
 
     // Mise à jour des valeurs individuelles d'offre  
-    WRITE("OfferedGreenLaborMicro", v[15]);
-    WRITE("OfferedBrownLaborMicro", v[17]);
+    WRITE("OfferedGreenLaborMicro", v[16]);
+    WRITE("OfferedBrownLaborMicro", v[18]);
+
+    // Mise à jour du statut en fonction des conditions du marché du travail
+    if (v[14] == 0) {  // Si le ménage est au chômage
+        if (v[16] > 0 || v[18] > 0) {  // Si des emplois sont disponibles
+            v[14] = (rand() % 2 == 0) ? 1 : 2;  // Transition vers emploi vert ou brun
+        }
+    } else if (v[14] == 1 || v[14] == 2) {  // Si le ménage est employé
+        if (v[16] == 0 && v[18] == 0) {  // Si aucun emploi n'est disponible
+            v[14] = 0;  // Retour au chômage
+        }
+    }
+    WRITE("Status", v[14]);  // Sauvegarder le nouveau statut
 }
 
 // Agrégation des offres individuelles des ménages
-v[18] = SUM("OfferedGreenLaborMicro");        // Total des offres individuelles pour le travail vert  
-v[19] = SUM("OfferedBrownLaborMicro");        // Total des offres individuelles pour le travail brun  
+v[19] = SUM("OfferedGreenLaborMicro");        // Total des offres individuelles pour le travail vert  
+v[20] = SUM("OfferedBrownLaborMicro");        // Total des offres individuelles pour le travail brun  
 
 // Agrégation des demandes des firmes
-v[20] = V((std::string(sectors[i]) + "_OfferedGreenLabor").c_str());  
-v[21] = V((std::string(sectors[i]) + "_OfferedBrownLabor").c_str());  
+v[21] = V((std::string(sectors[i]) + "_OfferedGreenLabor").c_str());  
+v[22] = V((std::string(sectors[i]) + "_OfferedBrownLabor").c_str());  
 
 // Calcul du chômage involontaire
-v[22] = v[4] + v[8] - (v[18] + v[19]);
-WRITE((std::string(sectors[i]) + "_InvoluntaryUnemployment").c_str(), v[22]);
+v[23] = v[4] + v[8] - (v[19] + v[20]);
+WRITE((std::string(sectors[i]) + "_InvoluntaryUnemployment").c_str(), v[23]);
 
 // Retour des résultats
-RESULT(v[18] + v[19]);
-
+RESULT(v[19] + v[20]);
 
 
 
@@ -1187,7 +1283,7 @@ Taux d'intérêt sur les dépôts selon les hypothèses post-keynésiennes:
 
 v[0] = V("CentralBankRate");           // Taux directeur de la banque centrale (i_CB)
 v[1] = V("MarketShareBank");           // Part de marché de la banque
-v[2] = V("CreditRisk");                // Risque de crédit (variable entre 0 et 1)
+v[2] = V("CreditConstraintVar");                // Risque de crédit (variable entre 0 et 1)
 v[3] = V("ReserveRequirement");        // Taux de réserve obligatoire (variable entre 0 et 1)
 v[4] = V("LiquidityPreference");       // Préférence pour la liquidité (variable entre 0 et 1)
 v[5] = V("BaseMarkup");                // Mark-up de base (ajusté par le risque de crédit et la part de marché)
@@ -1229,7 +1325,7 @@ Calcul du taux d'intérêt sur les prêts verts :
 
 v[0] = V("CentralBankRate");           // Taux directeur de la banque centrale (i_CB)
 v[1] = V("MarketShareBank");           // Part de marché de la banque
-v[2] = V("CreditConstraint");          // Contrainte de crédit (valeur entre 0 et 1)
+v[2] = V("CreditConstraintVar");          // Contrainte de crédit (valeur entre 0 et 1)
 v[3] = V("BaseMarkup");                // Mark-up de base pour l'impact de la part de marché
 v[4] = v[3] * v[1];                   // Mark-up proportionnel à la part de marché
 v[5] = V("GreenLoanFactor");           // Facteur spécifique aux prêts verts (réduction du taux)
@@ -1250,6 +1346,20 @@ v[1] = SUM("BankLoans");            // Total loans granted by all banks
 v[2] = (v[1] > 0) ? v[0] / v[1] : 0; // Market share as a fraction (0 if no loans in the system)
 
 RESULT(v[2])
+
+
+EQUATION("BankLoans")
+/*
+Total quantity of loans granted by the bank
+*/
+
+v[0] = V("LoanCons");
+v[1] = V("GreenLoans");
+v[2] = V("BrownLoans");
+
+v[3] = v[0] + v[1] + v[2];
+
+RESULT( v[3])
 
 
 
@@ -1304,7 +1414,7 @@ v[5] = 0;                            // Compteur pour itérer sur les banques di
 
 // Boucle pour itérer sur les banques disponibles
 for (int i = 0; i < v[6]; i++) {
-    v[7] = V("InterestRate");  // Récupérer le taux d'intérêt de la banque en cours (une seule variable dans V)
+    v[7] = V("LoanInterestRate");  // Récupérer le taux d'intérêt de la banque en cours (une seule variable dans V)
 
     // Si le taux d'intérêt est inférieur au taux moyen du marché
     if (v[7] < v[2]) {
@@ -1329,6 +1439,16 @@ if (v[4] == -1) {
 RESULT(v[3])                      // Retourner la banque choisie
 
 
+/*
+Comment
+EQUATION("MarketInterestRate")
+
+RESULT( )
+*/
+
+
+
+
 EQUATION("HouseholdBankDecision")
 /*
 Processus de décision du ménage pour changer de banque :
@@ -1339,8 +1459,8 @@ Processus de décision du ménage pour changer de banque :
 */
 
 v[0] = V("InitialBank");              // Banque initiale du ménage
-v[1] = V("CurrentDepositRate");        // Taux d'intérêt actuel sur les dépôts du ménage
-v[2] = V("CurrentGreenAssetRatio");    // Green Asset Ratio actuel de la banque du ménage
+v[1] = V("DepositInterestRate");        // Taux d'intérêt actuel sur les dépôts du ménage
+v[2] = V("GreenAssetRatio");    // Green Asset Ratio actuel de la banque du ménage
 v[3] = -1;                            // Variable pour stocker la banque choisie
 v[4] = 0;                             // Compteur pour itérer sur les banques disponibles
 
@@ -1372,6 +1492,21 @@ if (v[3] == -1) {
 RESULT(v[3])                            // Retourner la banque choisie
 
 
+EQUATION("GreenAssetRatio")
+/*
+Green Asset Ratio
+*/
+
+
+v[0] = V("GreenLoans");              // Total loans granted by the current bank
+v[1] = V("BankLoans");            // Total loans granted by all banks
+
+v[2] = v[0] / v[1];
+
+RESULT(v[2])
+
+
+
 
 EQUATION("BankProfit")
 /*
@@ -1379,14 +1514,14 @@ Calcul du profit de la banque en fonction des intérêts perçus sur les prêts 
 et des intérêts payés sur les dépôts.
 */
 
-v[0] = V("LoanRateGreen");   // Taux d'intérêt des prêts verts
-v[1] = V("LoanRateBrown");   // Taux d'intérêt des prêts bruns
-v[2] = V("LoanAmountGreen"); // Montant total des prêts verts
-v[3] = V("LoanAmountBrown"); // Montant total des prêts bruns
-v[4] = V("DepositAmount");   // Montant total des dépôts
-v[5] = V("DepositRate");     // Taux d'intérêt payé sur les dépôts
+v[0] = V("GreenLoanInterestRate");   // Taux d'intérêt des prêts verts
+v[1] = V("LoanInterestRate");   // Taux d'intérêt des prêts bruns
+v[2] = V("GreenLoans"); // Montant total des prêts verts
+v[3] = V("BrownLoans"); // Montant total des prêts bruns
+v[4] = V("Dep");   // Montant total des dépôts
+v[5] = V("DepositInterestRate");     // Taux d'intérêt payé sur les dépôts
 v[6] = V("LoanRateCons");
-v[7] = V("LoanAmountCons");
+v[7] = V("LoanCons");
 
 // Calcul des intérêts perçus sur les prêts verts et bruns, moins les intérêts payés sur les dépôts
 v[6] = (v[0] * v[2]) + (v[1] * v[3]) + (v[6] * v[7]) - (v[5] * v[4]); // Profit net de la banque
@@ -1405,10 +1540,10 @@ Modélisation normalisée du risque financier d'un ménage emprunteur dans le ca
 5. Normalisation du risque financier total pour la banque pour le ramener à un intervalle [0, 1].
 */
 
-v[0] = V("LoanAmount");            // Montant du crédit à la consommation (C)
+v[0] = V("LoanCons");            // Montant du crédit à la consommation (C)
 v[1] = V("InterestRate");          // Taux d'intérêt du crédit (r)
 v[2] = V("CreditDuration");        // Durée du crédit en mois (T)
-v[3] = V("Income");                // Revenu du ménage (Y)
+v[3] = V("Ydisp");                // Revenu du ménage (Y)
 v[4] = V("TotalDebt");             // Dette totale du ménage (D)
 
 // Calcul de la mensualité du crédit à la consommation
