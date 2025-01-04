@@ -95,50 +95,67 @@ Les statuts sont représentés par des valeurs numériques :
 Inclut FinPosHH comme source de revenus supplémentaires.
 */
 
-
-
-
 // Récupération des variables pertinentes
 v[0] = V("UnemploymentBenefit");  // Allocation chômage fixe
 v[1] = V("PropensityToConsume");  // Propension marginale à consommer
 v[2] = V("BaseConsumption");      // Niveau de consommation minimum
 v[3] = V("Status");               // Statut du ménage : 0, 1 ou 2
-v[4] = V("IndividualSalary");     // Salaire individuel du ménage (0 si chômage)
-v[5] = V("FinPosHH");             // Position financière nette du ménage
-v[6] = V("LoanCons");             // Dette de consommation actuelle du ménage
+v[4] = V("FinPosHH");             // Position financière nette du ménage
+v[5] = V("LoanCons");             // Dette de consommation actuelle du ménage
+v[6] = V("IdHousehold");          // Identifiant du ménage pour récupérer l'employeur
 
-// Détermination de la consommation en fonction du statut
+// Création de la chaîne pour l'ID de la firme
+char firmIdStr[50];  // Créer un tableau de char pour stocker l'ID sous forme de chaîne
+sprintf(firmIdStr, "households[%d].IdFirm", static_cast<int>(v[6]));  // Convertir l'ID du ménage en chaîne
+v[7] = V(firmIdStr);  // Récupérer l'ID de la firme
+
+// Création des chaînes pour les salaires
+char salaryBrownStr[50], salaryGreenStr[50];
+sprintf(salaryBrownStr, "firms[%d].salaryBrown", static_cast<int>(v[6]));  // Convertir l'ID de la firme en chaîne
+sprintf(salaryGreenStr, "firms[%d].salaryGreen", static_cast<int>(v[6]));  // Convertir l'ID de la firme en chaîne
+v[8] = V(salaryBrownStr);  // Salaire pour un emploi brown
+v[9] = V(salaryGreenStr);  // Salaire pour un emploi green
+
+// Détermination du salaire en fonction du statut du ménage
 switch (static_cast<int>(v[3])) { 
     case 0: // Unemployed
-        if ((v[0] + v[5]) < v[2]) { // Revenus (allocation + FinPosHH) insuffisants
-            v[7] = v[2] - (v[0] + v[5]); // Besoin d'endettement
-            v[6] += v[7];                // Augmenter la dette de consommation
-            v[8] = v[2];                 // Consommation au niveau de base
+        if ((v[0] + v[4]) < v[2]) { // Revenus (allocation + FinPosHH) insuffisants
+            v[10] = v[2] - (v[0] + v[4]); // Besoin d'endettement
+            v[5] += v[10];                // Augmenter la dette de consommation
+            v[11] = v[2];                 // Consommation au niveau de base
         } else {
-            v[8] = v[0] + v[5];          // Allocation et FinPosHH suffisants
+            v[11] = v[0] + v[4];          // Allocation et FinPosHH suffisants
         }
         break;
 
     case 1: // EmployedBrown
-    case 2: // EmployedGreen
-        if ((v[4] + v[5]) < v[2]) { // Revenus (salaire + FinPosHH) insuffisants
-            v[7] = v[2] - (v[4] + v[5]); // Besoin d'endettement
-            v[6] += v[7];                // Augmenter la dette de consommation
-            v[8] = v[2];                 // Consommation au niveau de base
+        if ((v[8] + v[4]) < v[2]) { // Revenus (salaire brown + FinPosHH) insuffisants
+            v[10] = v[2] - (v[8] + v[4]); // Besoin d'endettement
+            v[5] += v[10];                // Augmenter la dette de consommation
+            v[11] = v[2];                 // Consommation au niveau de base
         } else {
-            v[8] = v[2] + v[1] * (v[4] + v[5]); // Consommation basée sur les revenus
+            v[11] = v[2] + v[1] * (v[8] + v[4]); // Consommation basée sur les revenus
+        }
+        break;
+
+    case 2: // EmployedGreen
+        if ((v[9] + v[4]) < v[2]) { // Revenus (salaire green + FinPosHH) insuffisants
+            v[10] = v[2] - (v[9] + v[4]); // Besoin d'endettement
+            v[5] += v[10];                // Augmenter la dette de consommation
+            v[11] = v[2];                 // Consommation au niveau de base
+        } else {
+            v[11] = v[2] + v[1] * (v[9] + v[4]); // Consommation basée sur les revenus
         }
         break;
 
     default:
-        v[8] = 0;  // Sécurité : consommation nulle pour un statut inconnu
+        v[11] = 0;  // Sécurité : consommation nulle pour un statut inconnu
 }
 
 // Mettre à jour la variable LoanCons pour stocker la nouvelle dette
-WRITE("LoanCons", v[6]);
+WRITE("LoanCons", v[5]);
 
-RESULT(v[8]) // Retourner la consommation calculée
-
+RESULT(v[11]) // Retourner la consommation calculée
 
 
 EQUATION("Yfin")
@@ -1023,67 +1040,61 @@ RESULT(v[13])  // Retourne les coûts des transitions verts-bruns
 
 EQUATION("LaborDemandMicro")
 /*
-Demande de travail par firme, gestion des transitions entre emplois verts et bruns
-avec prise en compte des coûts d'ajustement, à l'échelle micro.
+Demande de travail par firme avec gestion des transitions entre emplois verts et bruns,
+en tenant compte des coûts d'ajustement, à l'échelle micro.
 */
 
 // Initialisation
-v[0] = V((std::string(sectors[i]) + "_FirmCount").c_str());  // Nombre de firmes dans le secteur
-v[1] = 0;  // Coût total des ajustements pour le secteur
+v[0] = 0; // Coût total des ajustements pour toutes les firmes
 
-// Boucle sur les firmes
-for (v[2] = 0; v[2] < v[0]; ++v[2]) {
-    // Construction de l'identifiant de la firme
-    std::string firmKey = std::string(sectors[i]) + "_Firm" + std::to_string((int)v[2]);
-
-    // Variables spécifiques à la firme
-    v[3] = V((firmKey + "_Production").c_str());      // Production
-    v[4] = V((firmKey + "_Productivity").c_str());    // Productivité
-    v[5] = V((firmKey + "_ShareGreenDemand").c_str()); // Part de demande verte
-    v[6] = V((firmKey + "_ShareBrownDemand").c_str()); // Part de demande brune
-    v[7] = V("AdjustmentCostFactor");                 // Coût de reconversion
+// Boucle sur toutes les firmes
+CYCLE(cur, "Firm") {
+    // Variables spécifiques à la firme courante
+    v[1] = VLS(cur, "FirmProduction", 1);      // Production
+    v[2] = VLS(cur, "FirmProductivity", 1);    // Productivité
+    v[3] = VLS(cur, "FirmShareGreenDemand", 1); // Part de demande verte
+    v[4] = VLS(cur, "FirmShareBrownDemand", 1); // Part de demande brune
+    v[5] = V("AdjustmentCostFactor");           // Coût de reconversion
 
     // Variables de travail de la période précédente
-    v[8] = VL((firmKey + "_GreenLabor").c_str(), 1);  // Travail vert précédent
-    v[9] = VL((firmKey + "_BrownLabor").c_str(), 1);  // Travail brun précédent
+    v[6] = VLS(cur, "FirmGreenLabor", 1);      // Travail vert précédent
+    v[7] = VLS(cur, "FirmBrownLabor", 1);      // Travail brun précédent
 
     // Calcul des besoins en travail
-    v[10] = v[3] / v[4];         // Travail total requis
-    v[11] = v[5] * v[10];        // Demande d'emplois verts
-    v[12] = v[6] * v[10];        // Demande d'emplois bruns
+    v[8] = v[1] / v[2];          // Travail total requis
+    v[9] = v[3] * v[8];          // Demande d'emplois verts
+    v[10] = v[4] * v[8];         // Demande d'emplois bruns
 
     // Ajustement du travail vert
-    v[13] = v[11] - v[8];        // Différence entre la demande et l'offre existante (travail vert)
-    if (v[13] > 0) {
-        v[14] = (v[13] < v[9]) ? v[13] : v[9];  // Reconversion des bruns en verts
-        v[15] = v[13] - v[14];  // Recrutements supplémentaires verts
-        v[16] = v[14] * v[7];   // Coût de reconversion
+    v[11] = v[9] - v[6];         // Différence entre la demande et l'offre existante (travail vert)
+    if (v[11] > 0) {
+        v[12] = (v[11] < v[7]) ? v[11] : v[7]; // Reconversion des bruns en verts
+        v[13] = v[11] - v[12];  // Recrutements supplémentaires verts
+        v[14] = v[12] * v[5];   // Coût de reconversion
     } else {
+        v[12] = 0;
+        v[13] = 0;
         v[14] = 0;
-        v[15] = 0;
-        v[16] = 0;
     }
 
     // Ajustement du travail brun
-    v[17] = v[12] - v[9];        // Différence pour le travail brun
-    if (v[17] < 0) {
-        v[18] = -v[17];          // Licenciements bruns
+    v[15] = v[10] - v[7];       // Différence pour le travail brun
+    if (v[15] < 0) {
+        v[16] = -v[15];          // Licenciements bruns
     } else {
-        v[18] = 0;
+        v[16] = 0;
     }
 
-    // Mise à jour des valeurs pour la firme
-    WRITE((firmKey + "_GreenLabor").c_str(), v[8] + v[14] + v[15]);
-    WRITE((firmKey + "_BrownLabor").c_str(), v[9] + v[17]);
+    // Mise à jour des valeurs pour la firme courante
+    WRITES(cur, "FirmGreenLabor", v[6] + v[12] + v[13]);
+    WRITES(cur, "FirmBrownLabor", v[7] + v[15]);
 
-    // Accumulation des coûts au niveau sectoriel
-    v[1] += v[16];
+    // Accumulation des coûts au niveau global
+    v[0] += v[14];
 }
 
-// Résultat : coût total des ajustements au niveau du secteur
-RESULT(v[1]);
-
-
+// Résultat : coût total des ajustements pour toutes les firmes
+RESULT(v[0]);
 
 
 
@@ -1124,48 +1135,56 @@ EQUATION("LaborSupplyMicro")
 Offre de travail des ménages, microéconomique, avec prise en compte des coûts et préférences individuels.
 */
 
-v[0] = V((std::string(sectors[i]) + "_WageGreen").c_str());  // Salaire pour les emplois verts dans ce secteur
-v[1] = V((std::string(sectors[i]) + "_WageBrown").c_str());  // Salaire pour les emplois bruns dans ce secteur
-v[2] = V("RequalificationCost");                // Coût personnel pour la reconversion
-v[3] = V("MobilityFactor");                     // Mobilité individuelle
-v[4] = V("UnemploymentRate");                   // Taux de chômage global
-v[5] = V((std::string(sectors[i]) + "_GreenLaborDemand").c_str());  // Demande d'emplois verts
-v[6] = V((std::string(sectors[i]) + "_BrownLaborDemand").c_str());  // Demande d'emplois bruns
-v[7] = V("WorkerTransitionRate");               // Taux de transition
-v[8] = V("FrictionalUnemployment");             // Chômage frictionnel
-v[9] = V("PolicySubsidy");                     // Subvention politique
+// Variables générales
+v[0] = V((std::string(sectors[i]) + "_WageGreen").c_str());     // Salaire pour les emplois verts dans ce secteur
+v[1] = V((std::string(sectors[i]) + "_WageBrown").c_str());     // Salaire pour les emplois bruns dans ce secteur
+v[2] = V("RequalificationCost");                               // Coût personnel pour la reconversion
+v[3] = V("MobilityFactor");                                    // Mobilité individuelle
+v[4] = V("UnemploymentRate");                                  // Taux de chômage global
+v[5] = V((std::string(sectors[i]) + "_GreenLaborDemand").c_str()); // Demande d'emplois verts
+v[6] = V((std::string(sectors[i]) + "_BrownLaborDemand").c_str()); // Demande d'emplois bruns
+v[7] = V("WorkerTransitionRate");                              // Taux de transition
+v[8] = V("FrictionalUnemployment");                            // Chômage frictionnel
+v[9] = V("PolicySubsidy");                                     // Subvention politique pour emplois verts
+
+// Initialisation des totaux agrégés
+v[18] = 0;  // Total de l'offre de travail vert
+v[19] = 0;  // Total de l'offre de travail brun
 
 // Boucle sur les ménages cherchant un emploi
 CYCLE(cur, "Households") {
+    // Variables spécifiques à chaque ménage
     v[10] = VLS(cur, "GreenJobPreference", 1);  // Préférence pour les emplois verts
     v[11] = VLS(cur, "BrownJobPreference", 1);  // Préférence pour les emplois bruns
     v[12] = VLS(cur, "TrainingCost", 1);        // Coût individuel de formation/requalification
     v[13] = VLS(cur, "RelocationCost", 1);      // Coût de la mobilité géographique
 
     // Calcul de l'attractivité des emplois verts
-    v[14] = v[0] - v[12] - v[2] + v[9] - v[13];
-    v[15] = (v[14] > 0) ? v[14] * v[10] : 0;  // Contribution potentielle aux emplois verts
+    v[14] = v[0] - v[12] - v[2] + v[9] - v[13]; // Ajustement pour salaire net et coûts
+    v[15] = max(0, v[14]) * v[10];             // Contribution potentielle aux emplois verts
 
     // Calcul de l'attractivité des emplois bruns
-    v[16] = v[1] - v[12] - v[13];
-    v[17] = (v[16] > 0) ? v[16] * v[11] : 0;  // Contribution potentielle aux emplois bruns
+    v[16] = v[1] - v[12] - v[13];              // Ajustement pour salaire net et coûts
+    v[17] = max(0, v[16]) * v[11];             // Contribution potentielle aux emplois bruns
 
-    // Mise à jour des décisions d'offre de travail
+    // Mise à jour des totaux agrégés pour chaque ménage
     WRITE("OfferedGreenLaborMicro", v[15]);
     WRITE("OfferedBrownLaborMicro", v[17]);
+
+    // Agrégation des offres de travail
+    v[18] += v[15];
+    v[19] += v[17];
 }
 
-// Calcul des totaux agrégés par secteur
-v[18] = SUM("OfferedGreenLaborMicro");
-v[19] = SUM("OfferedBrownLaborMicro");
-
+// Mise à jour des totaux agrégés par secteur
 WRITE((std::string(sectors[i]) + "_OfferedGreenLabor").c_str(), v[18]);
 WRITE((std::string(sectors[i]) + "_OfferedBrownLabor").c_str(), v[19]);
 
-// Calcul du chômage involontaire
-v[20] = v[4] + v[8] - (v[18] + v[19]);
+// Calcul et écriture du chômage involontaire
+v[20] = max(0, v[4] + v[8] - (v[18] + v[19]));
 WRITE((std::string(sectors[i]) + "_InvoluntaryUnemployment").c_str(), v[20]);
 
+// Résultat : Total de l'offre de travail
 RESULT(v[18] + v[19])
 
 
@@ -1229,27 +1248,68 @@ RESULT(v[19] + v[20]);
 
 
 
-// Équation des salaires individuels basée sur une part fixe des profits des firmes
+EQUATION("WageBill")
+/*
+Wage bill of a given firm. Depends on profits and the bargaining power of workers (related to unemployment rate).
+*/
+
+v[0] = V("UnemploymentRate");  // Taux de chômage
+v[1] = V("Profits");           // Profits de la firme
+v[2] = V("Wageshare");         // Part des salaires
+
+v[3] = v[1] * v[2] + (1 - v[0]);  // Masse salariale en fonction des profits, de la part des salaires et du taux de chômage
+
+RESULT(v[3]);  // Retourne le résultat de la masse salariale
+
+
+
 
 EQUATION("IndividualSalary")
 /*
-Chaque ménage reçoit un salaire en fonction de sa relation avec une firme spécifique.
+Cette équation détermine les salaires individuels des employés d'une entreprise,
+de manière à ce que la somme des salaires individuels égale la masse salariale (WageBill)
+définie précédemment pour chaque firme.
 */
 
+// Parcours des firmes pour calculer les salaires individuels
+CYCLE(cur, "Firms") {
+    // Récupérer l'ID de la firme
+    v[0] = VLS(cur, "IDFirm", 1);  // ID de la firme
 
-// Parcours des ménages pour associer avec leur firme employeur
-v[0] = V("households[i].employer_id");  
+    // Récupérer la masse salariale de la firme (WageBill)
+    v[1] = V("Wagebill");  // Masse salariale de la firme, supposons que v[0] * 100 soit la référence
 
-// Identifier la firme du secteur j
-v[1] = V((std::string(sectors[j]) + "_Profit").c_str());  
+    // Récupérer le nombre d'employés dans la firme
+    v[2] = V("NumEmployees");  // Nombre d'employés de la firme, supposons que v[0] * 200 soit la référence
 
-// Calcul de la rémunération en tant que 10% des profits
-v[2] = v[1] * 0.1;  
+    // Calcul du salaire de base par employé (partage équitable de la masse salariale entre les employés)
+    v[3] = v[1] / v[2];  // Salaire de base égal à la masse salariale divisée par le nombre d'employés
 
-// Mise à jour des salaires avec une conversion correcte de label
-WRITE((std::string("households[i]_Salary")).c_str(), v[2]); 
+    // Parcours des ménages pour associer les salaires à chaque employé de la firme
+    CYCLE(cur, "Households") {  // CYCLE ici sur les ménages
+        // Vérifier que l'employé appartient à la firme actuelle
+        v[4] = VLS(cur, "IdFirm", 1);  // ID de la firme de l'employé
+        if (v[4] == v[0]) {  // Si l'employé appartient à cette firme
 
-RESULT(v[2])
+            // Récupérer la préférence de l'employé pour l'emploi vert ou brun
+            v[5] = VLS(cur, "GreenJobPreference", 1);  // Préférence pour emploi vert (0 à 1)
+
+            // Calcul du facteur de salaire individuel ajusté en fonction de la préférence de l'employé
+            v[6] = v[5] * 0.1 + (1 - v[5]) * 0.1;  // On suppose que la préférence verte augmente légèrement le salaire
+
+            // Calcul du salaire final de l'employé (salaire de base ajusté par le facteur de préférence)
+            v[7] = v[3] * (1 + v[6]);  // Salaire final ajusté
+
+            // Mise à jour du salaire de l'employé
+WRITE(("households[" + std::to_string(v[4]) + "]_Salary").c_str(), v[7]);
+
+            // Résultat pour l'employé
+            RESULT(v[7]);
+        }
+    }
+}
+
+
 
 
 
@@ -1351,6 +1411,77 @@ v[3] = v[0] + v[1] + v[2];
 RESULT( v[3])
 
 
+EQUATION("GreenLoansVar")
+/*
+Total quantity of loans granted by the bank
+*/
+
+    v[0] = V("GreenLoansDem");          // Demande de prêts verts
+    v[1] = V("CreditConstraintVar");   // Variable de contrainte de crédit
+    v[2] = v[0] * (1 - v[1]);          // Calcul des nouveaux prêts verts
+
+RESULT(v[2])
+
+
+EQUATION("BrownLoansVar")
+/*
+Total quantity of loans granted by the bank
+*/
+
+    v[0] = V("BrownLoansDem");          // Demande de prêts verts
+    v[1] = V("CreditConstraintVar");   // Variable de contrainte de crédit
+    v[2] = v[0] * (1 - v[1]);          // Calcul des nouveaux prêts verts
+
+RESULT(v[2])
+
+
+EQUATION("GreenLoans")
+/*
+Comment
+*/
+
+v[0] = VL("GreenLoans", 1);
+v[1] = V("GreenLoansVar");
+
+v[2] = v[0] + v[1];
+
+RESULT( v[2])
+
+
+EQUATION("BrownLoans")
+/*
+Comment
+*/
+
+v[0] = VL("BrownLoans", 1);
+v[1] = V("BrownLoansVar");
+
+v[2] = v[0] + v[1];
+
+RESULT( v[2])
+
+
+EQUATION("GreenLoansSec")
+/*
+Comment
+*/
+
+v[0] = SUM("GreenLoans");
+
+RESULT( v[0])
+
+
+EQUATION("BrownLoansSec")
+/*
+Comment
+*/
+
+v[0] = SUM("BrownLoans");
+
+RESULT( v[0])
+
+
+
 
 EQUATION("CreditConstraintVar")
 /*
@@ -1390,42 +1521,39 @@ EQUATION("FirmBankSelection")
 /*
 Processus de sélection des banques par la firme basé sur le taux d'intérêt :
 1. La firme garde la même banque si le taux d'intérêt est inférieur au taux moyen du marché.
-2. Si la firme n'est pas satisfaite, elle choisit une nouvelle banque aléatoire avec un taux inférieur au taux moyen du marché.
-3. Si la firme n'est pas satisfaite de la première banque, elle accepte la deuxième banque quelle que soit son offre.
+2. Si la firme n'est pas satisfaite, elle choisit une nouvelle banque avec un taux d'intérêt inférieur au taux moyen du marché.
 */
 
-v[0] = V("PreviousBank");            // Banque utilisée précédemment
-v[1] = V("InterestRatePreviousBank"); // Taux d'intérêt de la banque précédente
-v[2] = V("MarketInterestRate");      // Taux d'intérêt moyen du marché
-v[3] = 0;                            // Variable pour stocker la banque choisie
-v[4] = -1;                           // Indicateur si une banque a été trouvée
-v[5] = 0;                            // Compteur pour itérer sur les banques disponibles
+v[0] = VLS(cur, "IdFirm", 1);                   // Identifiant de la firme (cur)
+v[1] = VLS(cur, "PreviousBank", 1);             // Banque utilisée précédemment
+v[2] = VLS(cur, "InterestRatePreviousBank", 1); // Taux d'intérêt de la banque précédente
+v[3] = VLS(cur, "MarketInterestRate", 1);       // Taux d'intérêt moyen du marché
+v[4] = -1;                                     // Variable pour stocker la banque choisie
+v[5] = 0;                                      // Compteur pour itérer sur les banques disponibles
 
 // Boucle pour itérer sur les banques disponibles
-for (int i = 0; i < v[6]; i++) {
-    v[7] = V("LoanInterestRate");  // Récupérer le taux d'intérêt de la banque en cours (une seule variable dans V)
+CYCLE(cur, "Banks") {
+    v[6] = VLS(cur, "IdBank", 1);               // Identifier la banque
+    v[7] = VLS(cur, "LoanInterestRate", 1);      // Taux d'intérêt de la banque en cours
 
     // Si le taux d'intérêt est inférieur au taux moyen du marché
-    if (v[7] < v[2]) {
+    if (v[7] < v[3]) {
         // Si aucune banque n'a été encore choisie
         if (v[4] == -1) {
-            v[3] = i;  // Choisir cette banque
+            v[4] = v[6];  // Choisir cette banque
         }
-    } else {
-        v[4] = v[4];  // Si le taux d'intérêt est trop élevé, continuer à chercher
     }
-
-    v[5] = v[5] + 1;             // Incrémenter le compteur de banques
+    v[5] = v[5] + 1;                            // Incrémenter le compteur de banques
 }
 
 // Si aucune banque n'a été trouvée avec un taux inférieur au taux moyen
 if (v[4] == -1) {
-    v[3] = V("BackupBank");      // Choisir une banque de secours
-} else {
-    v[3] = v[3];                 // Sinon, garder la banque choisie
+    v[4] = v[1];                               // Garder la banque initiale si aucune meilleure n'est trouvée
 }
 
-RESULT(v[3])                      // Retourner la banque choisie
+WRITE((std::string("firms[" + std::to_string(v[0]) + "]_IdBank")).c_str(), v[4]);  // Mise à jour de la banque choisie pour la firme
+
+RESULT(v[4])  // Retourner la banque choisie
 
 
 /*
@@ -1447,22 +1575,22 @@ Processus de décision du ménage pour changer de banque :
 2. Si les deux conditions sont remplies, le ménage change de banque.
 */
 
-v[0] = V("InitialBank");              // Banque initiale du ménage
-v[1] = V("DepositInterestRate");        // Taux d'intérêt actuel sur les dépôts du ménage
-v[2] = V("GreenAssetRatio");    // Green Asset Ratio actuel de la banque du ménage
-v[3] = -1;                            // Variable pour stocker la banque choisie
-v[4] = 0;                             // Compteur pour itérer sur les banques disponibles
+v[0] = VLS(cur, "IdBank", 1);              // Banque initiale du ménage
+v[1] = VLS(cur, "DepositInterestRate", 1);  // Taux d'intérêt actuel sur les dépôts du ménage
+v[2] = VLS(cur, "GreenAssetRatio", 1);      // Green Asset Ratio actuel de la banque du ménage
+v[3] = -1;                                           // Variable pour stocker la banque choisie
+v[4] = 0;                                            // Compteur pour itérer sur les banques disponibles
 
 // Boucle pour itérer sur les banques disponibles
-for (int i = 0; i < v[5]; i++) {
-    // Accéder aux taux et aux ratios pour chaque banque avec des indices numériques
-    v[6] = V("DepositRate_" + i);   // Taux d'intérêt sur les dépôts de la banque en cours
-    v[7] = V("GreenAssetRatio_" + i); // Green Asset Ratio de la banque en cours
+CYCLE(cur, "Banks") {
+    v[5] = VLS(cur, "IdBank", 1);                 // Identifier la banque
+    v[6] = VLS(cur, "DepositInterestRate", 1);    // Taux d'intérêt sur les dépôts de la banque en cours
+    v[7] = VLS(cur, "GreenAssetRatio", 1);        // Green Asset Ratio de la banque en cours
 
     // Vérification des conditions pour changer de banque
     if (v[6] > v[1] && v[7] > v[2]) {  // Si le taux de dépôt est supérieur et le green asset ratio est meilleur
         if (v[3] == -1) {               // Si aucune banque n'a été encore choisie
-            v[3] = i;                   // Changer de banque
+            v[3] = v[5];                // Changer de banque en sélectionnant l'IdBank
         }
     } else {
         v[3] = v[3];                    // Rester avec la banque actuelle
@@ -1478,7 +1606,11 @@ if (v[3] == -1) {
     v[3] = v[3];                       // Sinon, garder la banque choisie
 }
 
+WRITE((std::string("households[" + std::to_string(v[0]) + "]_IdBank")).c_str(), v[3]);  // Mise à jour de la banque choisie pour le ménage
+
 RESULT(v[3])                            // Retourner la banque choisie
+
+
 
 
 EQUATION("GreenAssetRatio")
@@ -1493,6 +1625,7 @@ v[1] = V("BankLoans");            // Total loans granted by all banks
 v[2] = v[0] / v[1];
 
 RESULT(v[2])
+
 
 
 
@@ -1616,6 +1749,7 @@ EQUATION("Ener")
     
     v[2] = v[0] * v[1];     // Calcul de Ener
     RESULT(v[2])
+
 
 EQUATION("ER")
     v[0] = V("rensh");      // rensh
@@ -1891,6 +2025,23 @@ EQUATION("rho")
 EQUATION("rho_V")
     v[0] = V("rho_V(-1)") * (1 - V("rho_0V"));
     RESULT(v[0]);
+
+
+
+
+
+/*EQUATIONS RELATIVES A LA BANQUE CENTRALE*/
+
+
+
+
+
+
+
+
+
+
+
 
 
 
