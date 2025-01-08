@@ -908,343 +908,165 @@ LABOUR MARKET
 
 
 
-EQUATION("GreenEmployees")
+EQUATION("Firm_BrownDemand")
 /*
-Part des emplois verts dans la firme :
-Emplois verts = Demande totale de travail * Part verte
-La part verte dépend des investissements verts et d'une norme sectorielle.
+Cette équation calcule la demande d'emplois bruns pour une entreprise,
+avec un arrondi pour obtenir un nombre entier d'emplois.
 */
-v[0] = V("LaborDemand");           // Demande totale de travail
-v[1] = V("GreenInvestment");       // Investissement vert de la firme
-v[2] = V("SectorGreenShare");      // Norme sectorielle de part verte
-v[3] = v[1] / (v[1] + 1);          // Transformation de l'investissement vert en proportion
-v[4] = max(v[3], v[2]);            // La part verte est au moins la norme sectorielle
-RESULT(v[0] * v[4])                // Emplois verts
 
+CYCLE(cur, "Firms") {
+    // Récupérer la production de la firme (production de biens ou services bruns)
+    v[0] = VS(cur, "ProductionBrown");  // Production de l'entreprise dans le secteur brun
 
+    // Récupérer la productivité des employés dans ce secteur
+    v[1] = VS(cur, "BrownProductivity");  // Productivité des employés dans le secteur brun
 
+    // Calcul de la demande d'emplois bruns : la production divisée par la productivité des employés
+    v[2] = v[0] / v[1];  // Demande d'emplois bruns
 
-EQUATION("BrownEmployees")
-/*
-Allocation des employés bruns
-*/
-v[0] = V("LaborDemand");            // Demande totale de travail
-v[1] = V("GreenEmployees");         // Employés verts
-RESULT(v[0] - v[1])                 // Employés bruns = Demande totale - Employés verts
+    // Arrondi du résultat pour obtenir un entier
+    //v[2] = ROUND(v[2]);  // Arrondir à l'entier le plus proche
 
-
-
-EQUATION("SectorLaborDemand")
-/*
-Demande totale de travail dans le secteur
-*/
-v[0] = 0;
-CYCLE(cur, "Firm")
-{
-    v[0] += VS(cur, "LaborDemand");  // Somme des demandes de travail des entreprises
-}
-RESULT(v[0])
-
-
-EQUATION("SectorGreenEmployees")
-/*
-Somme des emplois verts pour toutes les firmes d'un secteur.
-*/
-v[0] = 0;
-CYCLE(cur, "Firm")           // Parcours de chaque firme dans le secteur
-  v[0] += VS(cur, "GreenEmployees");
-RESULT(v[0])
-
-
-
-
-EQUATION("SectorBrownEmployees")
-/*
-Somme des emplois bruns pour toutes les firmes d'un secteur.
-*/
-v[0] = 0;
-CYCLE(cur, "Firm")           // Parcours de chaque firme dans le secteur
-  v[0] += VS(cur, "BrownEmployees");
-RESULT(v[0])
-
-
-
-EQUATION("GreenTransition")
-/*
-Reconversion des emplois bruns vers verts :
-Les employés bruns sont reconvertis progressivement selon un taux de transition.
-*/
-v[0] = V("BrownEmployees");      // Employés bruns actuels
-v[1] = V("GreenTransitionRate"); // Taux de reconversion
-v[2] = V("GreenEmployees");      // Employés verts actuels
-v[3] = v[1] * v[0];              // Employés bruns convertis en verts
-WRITE("BrownEmployees", v[0] - v[3]);  // Mise à jour des bruns
-WRITE("GreenEmployees", v[2] + v[3]);  // Mise à jour des verts
-RESULT(1)  // Processus terminé
-
-
-EQUATION("LaborDemand")
-/*
-Demande de travail par secteur pour chaque industrie, gestion des transitions entre emplois verts et bruns
-avec prise en compte des coûts d'ajustement.
-*/
-v[0] = V((std::string(sectors[i]) + "_Production").c_str());  // Production totale requise par secteur  
-v[1] = V((std::string(sectors[i]) + "_Productivity").c_str());  // Productivité moyenne des travailleurs  
-v[2] = V((std::string(sectors[i]) + "_ShareGreenDemand").c_str());  // Part de demande d'emplois verts  
-v[3] = V((std::string(sectors[i]) + "_ShareBrownDemand").c_str());  // Part de demande d'emplois bruns  
-v[4] = V("AdjustmentCostFactor");  // Coût des transitions verts-bruns  
-
-// Nombre d'emplois verts et bruns précédents dans le secteur
-v[5] = VL((std::string(sectors[i]) + "_GreenLabor").c_str(), 1);  
-v[6] = VL((std::string(sectors[i]) + "_BrownLabor").c_str(), 1);  
-
-// Besoins en travail total pour le secteur
-v[7] = v[0] / v[1];  
-
-// Demande d'emplois verts et bruns selon leurs parts respectives
-v[8] = v[2] * v[7];  // Demande d'emplois verts  
-v[9] = v[3] * v[7];  // Demande d'emplois bruns  
-
-// Ajustement des besoins en travail vert
-v[10] = v[8] - v[5];
-
-if (v[10] > 0) {
-    // Si la demande d'emplois verts dépasse l'offre existante, reconversion des bruns en verts
-    v[11] = (v[10] < v[6]) ? v[10] : v[6];
-    v[12] = v[10] - v[11];  // Nouveaux recrutements verts
-    v[13] = v[11] * v[4];  // Coût de reconversion des transitions verts-bruns
-} else {
-    v[11] = 0;
-    v[12] = 0;
-    v[13] = 0;
+    // Résultat : nombre d'emplois bruns demandés
+    RESULT(v[2]);
 }
 
-// Ajustement des emplois bruns
-v[14] = v[9] - v[6];
 
-if (v[14] < 0) {
-    v[15] = -v[14];  // Licenciements bruns (valeur absolue)
-} else {
-    v[15] = 0;
-}
-
-// Mise à jour des valeurs des transitions
-WRITE((std::string(sectors[i]) + "_GreenLabor").c_str(), v[5] + v[11] + v[12]);
-WRITE((std::string(sectors[i]) + "_BrownLabor").c_str(), v[6] + v[14]);
-
-RESULT(v[13])  // Retourne les coûts des transitions verts-bruns
-
-
-
-
-
-EQUATION("LaborDemandMicro")
+EQUATION("Firm_GreenDemand")
 /*
-Demande de travail par firme avec gestion des transitions entre emplois verts et bruns,
-en tenant compte des coûts d'ajustement, à l'échelle micro.
+Cette équation calcule la demande d'emplois verts pour une entreprise,
+avec un arrondi pour obtenir un nombre entier d'emplois.
 */
 
-// Initialisation
-v[0] = 0; // Coût total des ajustements pour toutes les firmes
+CYCLE(cur, "Firms") {
+    // Récupérer la production de la firme dans le secteur vert
+    v[0] = VS(cur, "ProductionGreen");  // Production de l'entreprise dans le secteur vert
 
-// Boucle sur toutes les firmes
-CYCLE(cur, "Firm") {
-    // Variables spécifiques à la firme courante
-    v[1] = VLS(cur, "FirmProduction", 1);      // Production
-    v[2] = VLS(cur, "FirmProductivity", 1);    // Productivité
-    v[3] = VLS(cur, "FirmShareGreenDemand", 1); // Part de demande verte
-    v[4] = VLS(cur, "FirmShareBrownDemand", 1); // Part de demande brune
-    v[5] = V("AdjustmentCostFactor");           // Coût de reconversion
+    // Récupérer la productivité des employés dans le secteur vert
+    v[1] = VS(cur, "GreenProductivity");  // Productivité des employés dans le secteur vert
 
-    // Variables de travail de la période précédente
-    v[6] = VLS(cur, "FirmGreenLabor", 1);      // Travail vert précédent
-    v[7] = VLS(cur, "FirmBrownLabor", 1);      // Travail brun précédent
+    // Calcul de la demande d'emplois verts : la production divisée par la productivité des employés
+    v[2] = v[0] / v[1];  // Demande d'emplois verts
 
-    // Calcul des besoins en travail
-    v[8] = v[1] / v[2];          // Travail total requis
-    v[9] = v[3] * v[8];          // Demande d'emplois verts
-    v[10] = v[4] * v[8];         // Demande d'emplois bruns
+    // Arrondi du résultat pour obtenir un entier
+    //v[2] = ROUND(v[2]);  // Arrondir à l'entier le plus proche
 
-    // Ajustement du travail vert
-    v[11] = v[9] - v[6];         // Différence entre la demande et l'offre existante (travail vert)
-    if (v[11] > 0) {
-        v[12] = (v[11] < v[7]) ? v[11] : v[7]; // Reconversion des bruns en verts
-        v[13] = v[11] - v[12];  // Recrutements supplémentaires verts
-        v[14] = v[12] * v[5];   // Coût de reconversion
-    } else {
-        v[12] = 0;
-        v[13] = 0;
-        v[14] = 0;
-    }
-
-    // Ajustement du travail brun
-    v[15] = v[10] - v[7];       // Différence pour le travail brun
-    if (v[15] < 0) {
-        v[16] = -v[15];          // Licenciements bruns
-    } else {
-        v[16] = 0;
-    }
-
-    // Mise à jour des valeurs pour la firme courante
-    WRITES(cur, "FirmGreenLabor", v[6] + v[12] + v[13]);
-    WRITES(cur, "FirmBrownLabor", v[7] + v[15]);
-
-    // Accumulation des coûts au niveau global
-    v[0] += v[14];
+    // Résultat : nombre d'emplois verts demandés
+    RESULT(v[2]);
 }
-
-// Résultat : coût total des ajustements pour toutes les firmes
-RESULT(v[0]);
-
-
-
-EQUATION("LaborSupply")
-/*
-Offre de travail des ménages en prenant en compte les transitions individuelles, les coûts et la mobilité.
-*/
-
-
-v[0]  = V((std::string(sectors[i]) + "_WageGreen").c_str());  // Salaire pour les emplois verts dans ce secteur  
-v[1]  = V((std::string(sectors[i]) + "_WageBrown").c_str());  // Salaire pour les emplois bruns dans ce secteur  
-v[2]  = V("RequalificationCost");                // Coût personnel pour la reconversion des travailleurs  
-v[3]  = V("MobilityFactor");                     // Influence des décisions de mobilité  
-v[4]  = V("UnemploymentRate");                   // Taux de chômage global  
-v[5]  = V((std::string(sectors[i]) + "_GreenLaborDemand").c_str());  // Demande d'emplois verts  
-v[6]  = V((std::string(sectors[i]) + "_BrownLaborDemand").c_str());  // Demande d'emplois bruns  
-v[7]  = V("WorkerTransitionRate");               // Taux de transition des travailleurs  
-v[8]  = V("FrictionalUnemployment");             // Chômage frictionnel  
-v[9]  = V("PolicySubsidy");                     // Subvention politique  
-
-  
-  v[10] = (v[0] - v[1] - v[2] + v[9] > 0) ? v[0] - v[1] - v[2] + v[9] : 0;
-	v[11] = ( (v[1] - v[0] - v[2]) > 0 ? (v[1] - v[0] - v[2]) : 0 ) * v[6] * v[7];
-
-  v[12] = v[10] * v[8];
-  v[13] = v[11] * v[8];
-
-WRITE((std::string(sectors[i]) + "_OfferedGreenLabor").c_str(), v[10] - v[12]);
-WRITE((std::string(sectors[i]) + "_OfferedBrownLabor").c_str(), v[11] - v[13]);
-WRITE((std::string(sectors[i]) + "_InvoluntaryUnemployment").c_str(), v[4] + v[8]);
-
-
-RESULT(v[10] + v[11])
-
-
-EQUATION("LaborSupplyMicro")
-/*
-Offre de travail des ménages, microéconomique, avec prise en compte des coûts et préférences individuels.
-*/
-
-// Variables générales
-v[0] = V((std::string(sectors[i]) + "_WageGreen").c_str());     // Salaire pour les emplois verts dans ce secteur
-v[1] = V((std::string(sectors[i]) + "_WageBrown").c_str());     // Salaire pour les emplois bruns dans ce secteur
-v[2] = V("RequalificationCost");                               // Coût personnel pour la reconversion
-v[3] = V("MobilityFactor");                                    // Mobilité individuelle
-v[4] = V("UnemploymentRate");                                  // Taux de chômage global
-v[5] = V((std::string(sectors[i]) + "_GreenLaborDemand").c_str()); // Demande d'emplois verts
-v[6] = V((std::string(sectors[i]) + "_BrownLaborDemand").c_str()); // Demande d'emplois bruns
-v[7] = V("WorkerTransitionRate");                              // Taux de transition
-v[8] = V("FrictionalUnemployment");                            // Chômage frictionnel
-v[9] = V("PolicySubsidy");                                     // Subvention politique pour emplois verts
-
-// Initialisation des totaux agrégés
-v[18] = 0;  // Total de l'offre de travail vert
-v[19] = 0;  // Total de l'offre de travail brun
-
-// Boucle sur les ménages cherchant un emploi
-CYCLE(cur, "Households") {
-    // Variables spécifiques à chaque ménage
-    v[10] = VLS(cur, "GreenJobPreference", 1);  // Préférence pour les emplois verts
-    v[11] = VLS(cur, "BrownJobPreference", 1);  // Préférence pour les emplois bruns
-    v[12] = VLS(cur, "TrainingCost", 1);        // Coût individuel de formation/requalification
-    v[13] = VLS(cur, "RelocationCost", 1);      // Coût de la mobilité géographique
-
-    // Calcul de l'attractivité des emplois verts
-    v[14] = v[0] - v[12] - v[2] + v[9] - v[13]; // Ajustement pour salaire net et coûts
-    v[15] = max(0, v[14]) * v[10];             // Contribution potentielle aux emplois verts
-
-    // Calcul de l'attractivité des emplois bruns
-    v[16] = v[1] - v[12] - v[13];              // Ajustement pour salaire net et coûts
-    v[17] = max(0, v[16]) * v[11];             // Contribution potentielle aux emplois bruns
-
-    // Mise à jour des totaux agrégés pour chaque ménage
-    WRITE("OfferedGreenLaborMicro", v[15]);
-    WRITE("OfferedBrownLaborMicro", v[17]);
-
-    // Agrégation des offres de travail
-    v[18] += v[15];
-    v[19] += v[17];
-}
-
-// Mise à jour des totaux agrégés par secteur
-WRITE((std::string(sectors[i]) + "_OfferedGreenLabor").c_str(), v[18]);
-WRITE((std::string(sectors[i]) + "_OfferedBrownLabor").c_str(), v[19]);
-
-// Calcul et écriture du chômage involontaire
-v[20] = max(0, v[4] + v[8] - (v[18] + v[19]));
-WRITE((std::string(sectors[i]) + "_InvoluntaryUnemployment").c_str(), v[20]);
-
-// Résultat : Total de l'offre de travail
-RESULT(v[18] + v[19])
-
 
 
 EQUATION("Status")
-/*
-Équation qui met à jour le statut des ménages en fonction des conditions du marché du travail,
-en tenant compte des préférences pour les emplois verts et bruns, ainsi que de la disponibilité des emplois.
-*/
+/* Variable représentant le statut d'emploi des ménages (0 = chômage, 1 = emploi brun, 2 = emploi vert).
+   Mise à jour avec la gestion des coûts d'ajustement pour le changement de secteur. */
 
-v[0] = V((std::string(sectors[i]) + "_WageGreen").c_str());  // Salaire des emplois verts
-v[1] = V((std::string(sectors[i]) + "_WageBrown").c_str());  // Salaire des emplois bruns
-v[2] = V("RequalificationCost");                // Coût individuel pour la reconversion  
-v[3] = V("MobilityFactor");                     // Coût de mobilité individuelle  
-v[4] = V("UnemploymentRate");                   // Taux global de chômage  
-v[5] = V((std::string(sectors[i]) + "_GreenLaborDemand").c_str());  // Demande d'emplois verts  
-v[6] = V((std::string(sectors[i]) + "_BrownLaborDemand").c_str());  // Demande d'emplois bruns  
-v[7] = V("WorkerTransitionRate");               // Taux de transition des travailleurs  
-v[8] = V("FrictionalUnemployment");             // Chômage frictionnel  
-v[9] = V("PolicySubsidy");                     // Subvention politique
+v[0] = VL("Status", 1); // Statut de l'emploi du ménage à la période précédente
+v[1] = V("IdHousehold"); // Identifiant du ménage
+v[2] = V("IdFirm"); // Identifiant de l'entreprise à t-1
+v[3] = V("IdSector"); // Secteur de l'entreprise à t-1
 
-// Boucle sur les ménages
-CYCLE(cur, "Households") {
-    v[10] = VLS(cur, "GreenJobPreference", 1);  // Préférence pour les emplois verts  
-    v[11] = VLS(cur, "BrownJobPreference", 1);  // Préférence pour les emplois bruns  
-    v[12] = VLS(cur, "TrainingCost", 1);        // Coût individuel de reconversion  
-    v[13] = VLS(cur, "RelocationCost", 1);      // Coût de mobilité géographique  
-
-    v[14] = VLS(cur, "Status", 1);              // Récupérer le statut actuel du ménage
-
-    // Calcul des attractivités des emplois verts et bruns
-    v[15] = v[0] - v[12] - v[2] + v[9] - v[13];  // Attractivité des emplois verts  
-    v[16] = (v[15] > 0) ? v[15] * v[10] : 0;    // Contribution individuelle aux emplois verts  
-
-    v[17] = v[1] - v[12] - v[13];              // Attractivité des emplois bruns  
-    v[18] = (v[17] > 0) ? v[17] * v[11] : 0;   // Contribution individuelle aux emplois bruns  
-
-    // Mise à jour des valeurs individuelles d'offre  
-    WRITE("OfferedGreenLaborMicro", v[16]);
-    WRITE("OfferedBrownLaborMicro", v[18]);
-
-    // Mise à jour du statut du ménage
-    if (v[14] == 0) {  // Si le ménage est au chômage
-        if (v[16] > 0 || v[18] > 0) {  // Si des emplois sont disponibles
-            v[14] = (rand() % 2 == 0) ? 1 : 2;  // Transition vers emploi vert ou brun
-        }
-    } else if (v[14] == 1 || v[14] == 2) {  // Si le ménage est employé
-        if (v[16] == 0 && v[18] == 0) {  // Si aucun emploi n'est disponible
-            v[14] = 0;  // Retour au chômage
-        }
+// Récupération des besoins en emplois de l'entreprise
+CYCLE(cur, "Firms") {
+    if (v[2] == VS(cur, "IDFirm")) { // Vérification si c'est la bonne entreprise
+        v[10] = VS(cur, "Firm_BrownDemand"); // Demande d'emplois bruns à t-1
+        v[12] = VS(cur, "Firm_GreenDemand"); // Demande d'emplois verts à t-1
     }
-    WRITE("Status", v[14]);  // Sauvegarder le nouveau statut
 }
 
-// Résultats finaux : Total des offres d'emploi vert et brun
-v[19] = SUM("OfferedGreenLaborMicro");        // Total des offres d'emplois verts  
-v[20] = SUM("OfferedBrownLaborMicro");        // Total des offres d'emplois bruns  
+v[11] = V("Firm_BrownDemand"); // Demande d'emplois bruns à t
+v[13] = V("Firm_GreenDemand"); // Demande d'emplois verts à t
 
-// Retour des résultats
-RESULT(v[19] + v[20]);
+// Calcul des postes à pourvoir ou à réduire
+v[20] = max(0, v[11] - v[10]); // Postes bruns disponibles
+v[21] = max(0, v[13] - v[12]); // Postes verts disponibles
+v[22] = max(0, v[10] - v[11]); // Licenciements bruns nécessaires
+v[23] = max(0, v[12] - v[13]); // Licenciements verts nécessaires
+
+// Gestion des ménages en emploi
+if (v[0] == 1) // Le ménage est en emploi brun
+{
+    if (v[22] > 0) // L'entreprise doit réduire des emplois bruns
+    {
+        v[30] = V("BrownRetainProbability"); // Probabilité de conserver l'emploi brun
+        if (RND > v[30]) // Le ménage est licencié
+        {
+            v[0] = 0; // Statut chômage
+            v[22] -= 1; // Réduction des licenciements bruns nécessaires
+            v[2] = -1; // Ménage sans employeur après licenciement
+        }
+    }
+}
+else if (v[0] == 2) // Le ménage est en emploi vert
+{
+    if (v[23] > 0) // L'entreprise doit réduire des emplois verts
+    {
+        v[31] = V("GreenRetainProbability"); // Probabilité de conserver l'emploi vert
+        if (RND > v[31]) // Le ménage est licencié
+        {
+            v[0] = 0; // Statut chômage
+            v[23] -= 1; // Réduction des licenciements verts nécessaires
+            v[2] = -1; // Ménage sans employeur après licenciement
+        }
+    }
+}
+
+// Embauche dans les emplois bruns
+if (v[0] == 0 && v[20] > 0) // Le ménage est au chômage et des postes bruns sont disponibles
+{
+    v[40] = V("BrownQualificationThreshold"); // Seuil de qualification brun
+    if (V("Qualification") >= v[40]) // Vérifie si le ménage est qualifié
+    {
+        v[0] = 1; // Le ménage est embauché en emploi brun
+        v[2] = v[2]; // Met à jour l'IdFirm avec l'IdFirm de la firme employant le ménage
+        v[20] -= 1; // Réduction du nombre de postes bruns disponibles
+    }
+}
+
+// Embauche dans les emplois verts
+if (v[0] == 0 && v[21] > 0) // Le ménage est au chômage et des postes verts sont disponibles
+{
+    v[41] = V("GreenQualificationThreshold"); // Seuil de qualification vert
+    if (V("Qualification") >= v[41]) // Vérifie si le ménage est qualifié
+    {
+        v[0] = 2; // Le ménage est embauché en emploi vert
+        v[2] = v[2]; // Met à jour l'IdFirm avec l'IdFirm de la firme employant le ménage
+        v[21] -= 1; // Réduction du nombre de postes verts disponibles
+    }
+}
+
+// Gestion des coûts d'ajustement pour les ménages cherchant à changer de secteur
+if (v[0] == 0) // Ménages au chômage cherchent un nouvel emploi
+{
+    v[50] = V("SectorChangeCost"); // Coût de changement de secteur
+    v[60] = -1; // Initialisation du salaire proposé maximal
+
+    CYCLE(cur, "Firms") // Parcours des entreprises
+    {
+        v[51] = VS(cur, "IdSector"); // Secteur de l'entreprise
+        v[52] = VS(cur, "OfferedWage"); // Salaire proposé
+
+        if (v[51] == v[3]) // Entreprises du même secteur
+        {
+            if (v[52] > v[60]) // Recherche du meilleur salaire
+            {
+                v[60] = v[52]; // Met à jour le salaire maximal
+                v[0] = 1; // Statut brun par défaut (secteur inchangé)
+                v[2] = v[2]; // Met à jour l'IdFirm avec l'IdFirm de la firme employant le ménage
+            }
+        }
+        else // Entreprises d'autres secteurs
+        {
+            if ((v[52] - v[50]) > v[60]) // Arbitrage avec coût d'ajustement
+            {
+                v[60] = v[52] - v[50]; // Salaire net après ajustement
+                v[0] = 2; // Statut vert si le salaire net est plus attractif
+                v[2] = v[2]; // Met à jour l'IdFirm avec l'IdFirm de la firme employant le ménage
+            }
+        }
+    }
+}
+
+RESULT(v[0]) // Retourne le statut d'emploi du ménage
 
 
 
@@ -1271,44 +1093,29 @@ de manière à ce que la somme des salaires individuels égale la masse salarial
 définie précédemment pour chaque firme.
 */
 
-// Parcours des firmes pour calculer les salaires individuels
 CYCLE(cur, "Firms") {
     // Récupérer l'ID de la firme
     v[0] = VLS(cur, "IDFirm", 1);  // ID de la firme
 
     // Récupérer la masse salariale de la firme (WageBill)
-    v[1] = V("Wagebill");  // Masse salariale de la firme, supposons que v[0] * 100 soit la référence
+    v[1] = V("Wagebill");  // Masse salariale de la firme
 
     // Récupérer le nombre d'employés dans la firme
-    v[2] = V("NumEmployees");  // Nombre d'employés de la firme, supposons que v[0] * 200 soit la référence
+    v[2] = V("NumEmployees");  // Nombre d'employés de la firme
 
     // Calcul du salaire de base par employé (partage équitable de la masse salariale entre les employés)
     v[3] = v[1] / v[2];  // Salaire de base égal à la masse salariale divisée par le nombre d'employés
 
     // Parcours des ménages pour associer les salaires à chaque employé de la firme
-    CYCLE(cur, "Households") {  // CYCLE ici sur les ménages
+    CYCLE(cur, "Households") {
         // Vérifier que l'employé appartient à la firme actuelle
         v[4] = VLS(cur, "IdFirm", 1);  // ID de la firme de l'employé
         if (v[4] == v[0]) {  // Si l'employé appartient à cette firme
-
-            // Récupérer la préférence de l'employé pour l'emploi vert ou brun
-            v[5] = VLS(cur, "GreenJobPreference", 1);  // Préférence pour emploi vert (0 à 1)
-
-            // Calcul du facteur de salaire individuel ajusté en fonction de la préférence de l'employé
-            v[6] = v[5] * 0.1 + (1 - v[5]) * 0.1;  // On suppose que la préférence verte augmente légèrement le salaire
-
-            // Calcul du salaire final de l'employé (salaire de base ajusté par le facteur de préférence)
-            v[7] = v[3] * (1 + v[6]);  // Salaire final ajusté
-
             // Mise à jour du salaire de l'employé
-WRITE(("households[" + std::to_string(v[4]) + "]_Salary").c_str(), v[7]);
-
-            // Résultat pour l'employé
-            RESULT(v[7]);
+            RESULT(v[3]);  // Résultat pour l'employé : salaire de base de la firme
         }
     }
 }
-
 
 
 
@@ -1551,64 +1358,47 @@ if (v[4] == -1) {
     v[4] = v[1];                               // Garder la banque initiale si aucune meilleure n'est trouvée
 }
 
-WRITE((std::string("firms[" + std::to_string(v[0]) + "]_IdBank")).c_str(), v[4]);  // Mise à jour de la banque choisie pour la firme
+// Mise à jour de l'IdBank de la firme en utilisant WRITES
+WRITES(cur, "IdBank", v[4]);  // Mettre à jour la banque choisie
 
 RESULT(v[4])  // Retourner la banque choisie
-
-
-/*
-Comment
-EQUATION("MarketInterestRate")
-
-RESULT( )
-*/
 
 
 
 
 EQUATION("HouseholdBankDecision")
 /*
-Processus de décision du ménage pour changer de banque :
-1. Le ménage conserve sa banque actuelle si les conditions suivantes ne sont pas remplies :
-   - Le taux d'intérêt sur les dépôts de la nouvelle banque est supérieur à celui de la banque actuelle.
-   - Le ratio d'actifs verts (green asset ratio) de la nouvelle banque est supérieur à celui de la banque actuelle.
-2. Si les deux conditions sont remplies, le ménage change de banque.
+Processus de décision du ménage pour choisir une banque :
+1. Le ménage évalue les banques disponibles et sélectionne celle qui offre un meilleur taux d'intérêt sur les dépôts
+   ET un ratio d'actifs verts supérieur.
+2. Si aucune banque ne répond à ces critères, le ménage conserve sa banque actuelle.
 */
 
-v[0] = VLS(cur, "IdBank", 1);              // Banque initiale du ménage
-v[1] = VLS(cur, "DepositInterestRate", 1);  // Taux d'intérêt actuel sur les dépôts du ménage
-v[2] = VLS(cur, "GreenAssetRatio", 1);      // Green Asset Ratio actuel de la banque du ménage
-v[3] = -1;                                           // Variable pour stocker la banque choisie
-v[4] = 0;                                            // Compteur pour itérer sur les banques disponibles
+v[0] = VS(cur, "IdBank");                // Banque actuelle du ménage
+v[1] = VS(cur, "DepositInterestRate");   // Taux d'intérêt actuel sur les dépôts du ménage
+v[2] = VS(cur, "GreenAssetRatio");       // Ratio d'actifs verts de la banque actuelle
+v[3] = v[0];                             // Initialiser avec la banque actuelle
 
-// Boucle pour itérer sur les banques disponibles
+//    object *bank;                            // Déclarer un pointeur pour itérer sur les banques
+
+// Parcourir les banques disponibles
 CYCLE(cur, "Banks") {
-    v[5] = VLS(cur, "IdBank", 1);                 // Identifier la banque
-    v[6] = VLS(cur, "DepositInterestRate", 1);    // Taux d'intérêt sur les dépôts de la banque en cours
-    v[7] = VLS(cur, "GreenAssetRatio", 1);        // Green Asset Ratio de la banque en cours
+    v[5] = VS(cur, "IdBank");                // Identifiant de la banque en cours
+    v[6] = VS(cur, "DepositInterestRate");   // Taux d'intérêt de la banque en cours
+    v[7] = VS(cur, "GreenAssetRatio");       // Ratio d'actifs verts de la banque en cours
 
-    // Vérification des conditions pour changer de banque
-    if (v[6] > v[1] && v[7] > v[2]) {  // Si le taux de dépôt est supérieur et le green asset ratio est meilleur
-        if (v[3] == -1) {               // Si aucune banque n'a été encore choisie
-            v[3] = v[5];                // Changer de banque en sélectionnant l'IdBank
-        }
-    } else {
-        v[3] = v[3];                    // Rester avec la banque actuelle
+    // Vérifier si la banque actuelle est meilleure
+    if (v[6] > v[1] && v[7] > v[2]) {         // Conditions pour changer de banque
+        v[3] = v[5];                          // Sélectionner cette banque
+        v[1] = v[6];                          // Mettre à jour les critères de comparaison
+        v[2] = v[7];                          // Mettre à jour les critères de comparaison
     }
-
-    v[4] = v[4] + 1;                   // Incrémenter le compteur de banques
 }
 
-// Si aucune banque n'a été trouvée avec un taux de dépôt et un green asset ratio meilleurs
-if (v[3] == -1) {
-    v[3] = v[0];                       // Garder la banque initiale si aucune banque meilleure n'est trouvée
-} else {
-    v[3] = v[3];                       // Sinon, garder la banque choisie
-}
+// Mettre à jour la banque du ménage si elle a changé
+WRITES(cur, "IdBank", v[3]);  // Mise à jour de la banque choisie pour le ménage
 
-WRITE((std::string("households[" + std::to_string(v[0]) + "]_IdBank")).c_str(), v[3]);  // Mise à jour de la banque choisie pour le ménage
-
-RESULT(v[3])                            // Retourner la banque choisie
+RESULT(v[3])  // Retourner l'identifiant de la banque choisie
 
 
 
@@ -2051,6 +1841,59 @@ EQUATION("rho_V")
 
 
 
+
+/*EQUATIONS RELATIVES A L'ACCUMULATION DU CAPITAL*/
+
+
+
+
+EQUATION("Total Capital")
+/*
+Evolution of Total Capital
+*/
+
+v[0] = V("Brown Capital");
+v[1] = V("Green Capital");
+
+v[2] = v[0] + v[1];
+
+RESULT( v[2])
+
+
+
+EQUATION("Brown Capital")
+/*
+Evolution of brown capital.
+*/
+
+v[0] = VL("Brown Capital", 1);
+v[1] = V("Brown Investment");
+v[2] = V("Delta");
+
+v[3] = v[0] + v[1] - (v[2] * v[0]);
+
+RESULT( v[3])
+
+
+EQUATION("Green Capital")
+/*
+Evolution of green capital.
+*/
+
+v[0] = VL("Green Capital", 1);
+v[1] = V("Brown Investment");
+v[2] = V("Delta");
+
+v[3] = v[0] + v[1] - (v[2] * v[0]);
+
+RESULT( v[3])
+
+
+
+/*EQUATIONS RELATIVES AUX VENTES*/
+
+
+
 EQUATION("Turnover")
 /*
 CA
@@ -2417,6 +2260,7 @@ CYCLE(cur, "Firm")//on s'assure que les budgets ont ete calcules et on calcule l
 RESULT(v[0] )
 
 
+
 EQUATION("Exit")
 /*
 processus de sorties de firmes
@@ -2434,6 +2278,7 @@ CYCLE(cur, "Firm")//on fait sortir les firmes qui quittent le marche
  }
 
 RESULT(1 )
+
 
 
 EQUATION("Enter")
