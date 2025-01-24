@@ -85,6 +85,128 @@ MODELBEGIN
 
 /*CYCLE D'ACHAT DES CLIENTS*/ 
 
+EQUATION("NeedsIndex")
+/*
+Comment
+*/
+
+v[0] = VL("NeedsIndex", 1);
+v[1] = V("GrNeedsIndex");
+
+v[2] = v[0] * (1 + v[1]);
+
+RESULT( v[2])
+
+
+
+EQUATION("GrNeedsIndex")
+/*
+Comment
+Mean Disposable Income or Minimum Wage?
+*/
+
+v[0] = V("hum0");
+v[1] = V("hum1");
+v[2] = V("hum2");
+v[3] = V("hum3");
+v[4] = V("BaseConsumption");
+v[5] = V("DisposableIncome");
+v[6] = V("MeanDisposableIncome");
+v[7] = V("PublicServicesAccess");
+v[8] = V("hum4");
+v[9] = V("Recognition");
+
+v[10] = v[0] * (1 - (v[4] / v[5])) + v[1] * (v[5] / v[6]) + v[2] * v[7];
+
+RESULT( v[10])
+
+
+EQUATION("Recognition")
+/*
+This equation captures the political effect of austerity versus redistributive policies. It follows the findings on austerity and populism since the 2010's.
+*/
+
+v[0] = V("StabVarRecognition");
+v[1] = V("Taxes");
+v[2] = V("Red");
+
+v[3] = v[0] * (v[2] - v[1]);
+
+RESULT( v[3])
+
+
+
+EQUATION("PublicServiceAccess")
+/*
+Comment
+*/
+
+v[0] = V("GenParPubSerAccess");
+v[1] = V("PubSpendPubServ");
+v[2] = V("Spatial Justice");
+
+v[3] = v[0] * v[1] * v[2];
+
+RESULT( v[3])
+
+
+EQUATION("Spatial Justice")
+/*
+Comment
+*/
+
+v[0] = V("StabPar");
+v[1] = V("ConsTrans");
+v[2] = V("DisposableIncome");
+v[4] = V("Red");
+v[5] = V("Par2");
+v[7] = V("GeneralParSpatialJustice");
+
+v[6] = v[7] * (v[0] * (v[1]/v[2]) + v[5] * v[4]);
+
+RESULT( v[6])
+
+
+
+EQUATION("VoteDecision")
+/*
+Calcul de la décision de vote en fonction de l'évolution du NeedsIndex, du bandwagon effect, et de l'inertie liée au vote précédent.
+*/
+
+v[0] = V("NeedsIndex");          // Indice de satisfaction des besoins actuel
+v[1] = VL("NeedsIndex", 1);      // Indice de satisfaction des besoins à la période précédente
+v[2] = V("BandwagonEffect");     // Proportion d'agents ayant voté anti-transition à la période précédente
+v[3] = VL("VoteDecision", 1);    // Vote de l'agent à la période précédente (1 = anti-transition, 0 = pro-transition)
+
+// Pondérations des facteurs influençant la probabilité de voter anti-transition
+v[4] = 0.5;                      // Pondération de l'évolution des besoins
+v[5] = 0.3;                      // Pondération de l'effet de groupe (bandwagon)
+v[6] = 0.2;                      // Pondération de l'inertie liée au vote précédent
+
+// Calcul de la probabilité de voter anti-transition
+v[7] = v[4] * (v[0] - v[1]);    // Contribution de l'évolution des besoins
+v[7] = v[7] + v[5] * v[2];      // Ajout de l'effet bandwagon
+v[7] = v[7] + v[6] * v[3];      // Ajout de l'inertie
+
+// Limiter la probabilité de voter anti-transition à [0, 1] sans utiliser MIN et MAX
+if (v[7] < 0) {
+    v[7] = 0;  // Si v[7] est inférieur à 0, on le limite à 0
+} else if (v[7] > 1) {
+    v[7] = 1;  // Si v[7] est supérieur à 1, on le limite à 1
+}
+
+// Décision de vote : 1 = anti-transition, 0 = pro-transition
+if (RND < v[7]) {
+    v[8] = 1; // Vote anti-transition
+} else {
+    v[8] = 0; // Vote pro-transition
+}
+
+RESULT(v[8])
+
+
+
+
 
 
 EQUATION("HouseholdConsumption")
@@ -1887,6 +2009,113 @@ v[2] = V("Delta");
 v[3] = v[0] + v[1] - (v[2] * v[0]);
 
 RESULT( v[3])
+
+
+EQUATION("Brown Investment")
+/*
+Comment
+*/
+
+v[0] = V("BrownLoansVar");
+
+RESULT( v[0])
+
+
+EQUATION("Green Investment")
+/*
+Comment
+*/
+
+v[0] = V("GreenLoansVar");
+
+RESULT( v[0])
+
+
+
+EQUATION("BrownLoansDem")
+/*
+Comment
+*/
+
+v[0] = V("BrownInvDes");
+
+RESULT( v[0])
+
+
+EQUATION("GreenLoansDem")
+/*
+Comment
+*/
+
+v[0] = V("GreenInvDes");
+
+RESULT( v[0])
+
+
+EQUATION("BrownInvDes")
+/*
+Comment
+*/
+
+v[0] = V("GrKdB");
+v[1] = VL("Brown Capital", 1);
+
+v[2] = v[0] * v[1];
+
+RESULT( v[2])
+
+
+EQUATION("GreenInvDes")
+/*
+Comment
+*/
+
+v[0] = V("GrKdV");
+v[1] = VL("Green Capital", 1);
+
+v[2] = v[0] * v[1];
+
+RESULT( v[2])
+
+
+EQUATION("GrKdB")
+/*
+Comment
+*/
+
+v[0] = V("Animal Spirits_B");
+v[1] = V("gamma1_B");
+v[2] = V("gamma2_B");
+v[3] = V("gamma3_B");
+v[4] = V("gamma4_B");
+v[5] = V("ratiocashflow");
+v[6] = V("LeverageFirm");
+v[7] = V("capacityutilization");
+v[8] = V("BrownLoanInterestRate");
+
+v[9] = v[0] + v[1] * v[5] - v[2] * v[6] + v[3] * v[7] - v[4] * v[8];
+
+RESULT( v[9])
+
+
+EQUATION("GrKdV")
+/*
+Comment
+*/
+
+v[0] = V("Animal Spirits_V");
+v[1] = V("gamma1_V");
+v[2] = V("gamma2_V");
+v[3] = V("gamma3_V");
+v[4] = V("gamma4_V");
+v[5] = V("ratiocashflow");
+v[6] = V("LeverageFirm");
+v[7] = V("capacityutilization");
+v[8] = V("GreenLoanInterestRate");
+
+v[9] = v[0] + v[1] * v[5] - v[2] * v[6] + v[3] * v[7] - v[4] * v[8];
+
+RESULT( v[9])
 
 
 
@@ -4605,8 +4834,3 @@ void close_sim(void)
 {
 
 }
-
-
-
-
-
