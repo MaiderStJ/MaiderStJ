@@ -83,7 +83,380 @@ MODELBEGIN
 
 
 
-/*CYCLE D'ACHAT DES CLIENTS*/ 
+
+/*EQUATIONS GENERALES*/
+/*EQUATIONS GENERALES*/
+/*EQUATIONS GENERALES*/
+/*EQUATIONS GENERALES*/
+/*EQUATIONS GENERALES*/
+/*EQUATIONS GENERALES*/
+/*EQUATIONS GENERALES*/
+/*EQUATIONS GENERALES*/
+
+
+
+
+
+
+
+
+
+/*POLITIQUES PUBLIQUES*/ 
+/*POLITIQUES PUBLIQUES*/
+/*POLITIQUES PUBLIQUES*/
+/*POLITIQUES PUBLIQUES*/
+/*POLITIQUES PUBLIQUES*/
+/*POLITIQUES PUBLIQUES*/
+/*POLITIQUES PUBLIQUES*/
+/*POLITIQUES PUBLIQUES*/
+
+
+
+
+/*FINANCING AND STATE BUDGET*/
+/*FINANCING AND STATE BUDGET*/
+
+
+EQUATION("GovernmentDeficit")
+/*
+Calcul du déficit public.
+Le déficit augmente avec les dépenses et diminue avec les revenus.
+*/
+
+// Variables représentant les dépenses publiques
+v[0] = V("UnemploymentBenefitProgramme");  // Coût des allocations chômage
+v[1] = V("CostJobGuarantee");              // Coût du programme d'emploi garanti
+v[2] = V("TotalRed");                           // Autres transferts ou aides
+v[3] = V("PubSpendPubServ");               // Dépenses pour les services publics
+v[4] = V("ReskillingProgrammeCost");       // Coût du programme de requalification professionnelle
+v[5] = V("TotalPublicInvestment");         // Total des investissements publics
+v[6] = V("TotalSubsidies");                // Total des subventions publiques
+
+// Variables représentant les revenus publics
+v[7] = V("Taxes");                         // Recettes fiscales
+v[8] = V("CentralBankProfits");            // Profits de la banque centrale
+v[9] = V("TotalPenalties");                // Recettes issues des pénalités
+
+// Calcul du déficit public : dépenses - revenus
+v[10] = (v[0] + v[1] + v[2] + v[3] + v[4] + v[5] + v[6])  // Total des dépenses
+      - (v[7] + v[8] + v[9]);                            // Total des revenus
+
+RESULT(v[10])
+
+
+
+EQUATION("GovernmentBonds")
+/*
+Calcul de l'émission ou du remboursement d'obligations gouvernementales pour financer le déficit.
+*/
+
+// Récupérer le déficit du gouvernement pour cette période
+v[0] = V("GovernmentDeficit");  // Déficit calculé dans l'équation correspondante
+
+// Obligations émises ou remboursées
+v[1] = VL("GovernmentBonds", 1);  // Stock d'obligations à la période précédente
+
+// Mise à jour du stock d'obligations
+v[2] = v[1] + v[0];  // Ajouter le déficit (positif ou négatif) au stock précédent
+
+RESULT(v[2])
+
+
+EQUATION("InterestRatePublicDebt")
+/*
+Calcul du taux d'intérêt sur la dette publique.
+Le taux est poussé à la hausse par le ratio Dette/PIB et réduit par la variation des Bonds achetés par la BCE.
+*/
+
+// Récupérer les variables nécessaires
+v[0] = V("GovernmentDebt");           // Stock total de la dette publique
+v[1] = V("GDP");                      // Produit Intérieur Brut (PIB)
+v[2] = V("BondsPurchasedByECB");      // Obligations achetées par la BCE à cette période
+v[3] = VL("BondsPurchasedByECB", 1); // Obligations achetées par la BCE à la période précédente
+v[4] = VL("InterestRatePublicDebt", 1); // Taux d'intérêt sur la dette publique à la période précédente
+
+// Paramètres du modèle
+v[5] = 0.05;  // Sensibilité à l'augmentation du ratio Dette/PIB
+v[6] = 0.03;  // Sensibilité à la baisse liée aux achats d'obligations de la BCE
+
+// Calcul du ratio Dette/PIB
+if (v[1] > 0) {
+    v[7] = v[0] / v[1];  // Ratio Dette/PIB
+} else {
+    v[7] = 0;            // Éviter les divisions par zéro
+}
+
+// Calcul de la variation des achats d'obligations de la BCE
+v[8] = v[2] - v[3]; // Variation des Bonds achetés par la BCE
+
+// Ajustement du taux d'intérêt
+v[9] = v[4] + v[5] * v[7];  // Hausse due au ratio Dette/PIB
+v[9] = v[9] - v[6] * v[8];  // Baisse due aux achats d'obligations de la BCE
+
+RESULT(v[9])
+
+
+
+/*JOB GUARANTEE*/
+/*JOB GUARANTEE*/
+
+
+
+EQUATION("TakePublicJob")
+/*
+Prise de décision d'un agent au chômage pour accepter ou non un emploi garanti par l'État.
+Retourne 1 si l'agent accepte l'emploi, 0 sinon.
+Met à jour la variable "Status" à 3 en cas d'acceptation.
+*/
+
+// Variables influençant la décision
+v[0] = V("UnemploymentBenefit");  // Allocation chômage de l'agent
+v[1] = V("WagePublicJobs");       // Salaire proposé par l'emploi garanti
+v[2] = V("DistanceToJob");        // Distance ou coût de déplacement vers l'emploi garanti
+v[3] = V("JobGuaranteeProgram");  // État du programme de garantie d'emploi (1 = actif, 0 = inactif)
+
+// Calcul du gain net lié à l'emploi public
+v[4] = v[3] * (v[1] - v[0] - v[2]);  // Gain net : (salaire public - allocation - coût de déplacement)
+
+// Décision de l'agent
+if (v[4] > 0) {
+    WRITE("Status", 3);  // Met à jour le statut à 3 (emploi garanti accepté)
+    v[5] = 1;            // Décision : accepter l'emploi
+} else {
+    v[5] = 0;            // Décision : refuser l'emploi
+}
+
+// Résultat de l'équation
+RESULT(v[5])
+
+
+
+
+EQUATION("CostJobGuarantee")
+/*
+Calcul des coûts totaux liés au programme de garantie d'emploi.
+Le coût est égal à la somme des rémunérations des bénéficiaires (statut = 3), payés au salaire minimum.
+*/
+
+// Initialisation du coût total
+v[0] = V("MinimumWage");  // Salaire minimum
+v[1] = 0;                 // Coût total initialisé à 0
+
+CYCLE(cur, "Households") { // Parcours de tous les agents dans la branche "Households"
+    if (VS(cur, "Status") == 3) {  // Vérifie si l'agent est dans le programme (statut = 3)
+        v[1] += v[0];              // Ajoute le salaire minimum au coût total
+    }
+}
+
+RESULT(v[1])  // Retourne le coût total
+
+
+
+/*RESKILLING PROGRAMME*/
+/*RESKILLING PROGRAMME*/
+
+
+
+EQUATION("ReskillingPolicy")
+/*
+Modélisation d'une politique de requalification professionnelle.
+Les agents LowSkilled (SkillStatus = 1) peuvent participer à un programme de formation.
+Pendant leur formation (deux périodes), ils ne sont rémunérés qu'au niveau de l'UnemploymentBenefit,
+et leur variable Status est mise à jour pour refléter leur participation au programme (Status = 5).
+*/
+
+// Initialisation des compteurs
+v[0] = 0;  // Nombre total d'agents en formation
+v[1] = 0;  // Nombre total d'agents ayant terminé leur formation
+v[2] = V("UnemploymentBenefit");  // Allocation chômage
+
+CYCLE(cur, "Households") {  // Parcours de tous les agents de la branche "Households"
+    if (VS(cur, "SkillStatus") == 1) {  // Si l'agent est LowSkilled (travailleur peu qualifié)
+        if (VS(cur, "ReskillingTimer") == 0) {  // Si l'agent n'est pas déjà en formation
+            v[3] = RND;  // Tirage aléatoire pour simuler la décision d'entrer en formation
+            if (v[3] < 0.5) {  // Seulement 50 % des agents acceptent de se requalifier
+                WRITES(cur, "ReskillingTimer", 1);  // Démarre la formation (période 1)
+                WRITES(cur, "Salary", v[2]);        // Rémunération limitée à UnemploymentBenefit
+                WRITES(cur, "Status", 5);          // Met à jour Status à 5 pour représenter la formation
+                v[0] += 1;  // Incrémente le compteur des agents en formation
+            }
+        }
+    } else if (VS(cur, "ReskillingTimer") > 0) {  // Si l'agent est déjà en formation
+        v[4] = VS(cur, "ReskillingTimer") + 1;  // Incrémente le timer de formation
+        WRITES(cur, "ReskillingTimer", v[4]);  // Met à jour le timer
+
+        if (v[4] >= 2) {  // Si la formation est terminée (après deux périodes)
+            WRITES(cur, "SkillStatus", 2);     // Change le statut à HighSkilled
+            WRITES(cur, "ReskillingTimer", 0); // Réinitialise le timer
+            WRITES(cur, "Status", 0);         // Réinitialise le Status à 0 (ou valeur par défaut)
+            v[1] += 1;                         // Incrémente le compteur des agents formés
+        }
+    }
+}
+
+// Résultat : Retourne le nombre d'agents actuellement en formation
+RESULT(v[0])
+
+
+
+
+/*SUBSIDIES*/
+/*SUBSIDIES*/
+
+
+
+
+EQUATION("TotalSubsidies")
+/*
+Calcul du total des subventions publiques allouées à différents secteurs.
+*/
+
+// Subventions par secteur
+v[0] = V("SubsidiesAg");     // Subventions pour l'agriculture
+v[1] = V("SubsidiesEner");   // Subventions pour l'énergie
+v[2] = V("SubsidiesTrans");  // Subventions pour le transport
+v[3] = V("SubsidiesHous");   // Subventions pour le logement
+v[4] = V("SubsidiesInd");    // Subventions pour l'industrie
+v[5] = V("SubsidiesTC");     // Subventions pour la technologie et communication
+
+// Calcul du total des subventions
+v[6] = v[0] + v[1] + v[2] + v[3] + v[4] + v[5];
+
+RESULT(v[6])
+
+
+EQUATION("SubsidiesAg")
+/*
+Calcul du total des subventions pour le secteur de l'agriculture.
+Somme des subventions individuelles allouées aux agents dans ce secteur.
+*/
+v[0] = SUM("SubsidyAg");
+RESULT(v[0])
+
+
+EQUATION("SubsidiesEner")
+/*
+Calcul du total des subventions pour le secteur de l'énergie.
+Somme des subventions individuelles allouées aux agents dans ce secteur.
+*/
+v[0] = SUM("SubsidyEner");
+RESULT(v[0])
+
+
+EQUATION("SubsidiesTrans")
+/*
+Calcul du total des subventions pour le secteur du transport.
+Somme des subventions individuelles allouées aux agents dans ce secteur.
+*/
+v[0] = SUM("SubsidyTrans");
+RESULT(v[0])
+
+
+EQUATION("SubsidiesHous")
+/*
+Calcul du total des subventions pour le secteur du logement.
+Somme des subventions individuelles allouées aux agents dans ce secteur.
+*/
+v[0] = SUM("SubsidyHous");
+RESULT(v[0])
+
+
+EQUATION("SubsidiesInd")
+/*
+Calcul du total des subventions pour le secteur de l'industrie.
+Somme des subventions individuelles allouées aux agents dans ce secteur.
+*/
+v[0] = SUM("SubsidyInd");
+RESULT(v[0])
+
+
+EQUATION("SubsidiesTC")
+/*
+Calcul du total des subventions pour le secteur de la technologie et de la communication.
+Somme des subventions individuelles allouées aux agents dans ce secteur.
+*/
+v[0] = SUM("SubsidyTC");
+RESULT(v[0])
+
+
+
+/*PUBLIC INVESTMENTS*/
+/*PUBLIC INVESTMENTS*/
+
+
+
+EQUATION("PublicInvestmentAg")
+/*
+Calcul du total des investissements publics pour le secteur de l'agriculture. Somme des investissements individuels alloués dans ce secteur.
+*/
+
+v[0] = SUM("PubInvestmentAg");  // Somme des investissements dans le secteur agricole
+
+RESULT(v[0])
+
+
+EQUATION("PublicInvestmentEner")
+
+/* Calcul du total des investissements publics pour le secteur de l'énergie. Somme des investissements individuels alloués dans ce secteur. */
+
+v[0] = SUM("PubInvestmentEner");  // Somme des investissements dans le secteur énergétique
+
+RESULT(v[0])
+
+
+EQUATION("PublicInvestmentTrans")
+
+/* Calcul du total des investissements publics pour le secteur des transports. Somme des investissements individuels alloués dans ce secteur. */
+
+v[0] = SUM("PubInvestmentTrans");  // Somme des investissements dans le secteur des transports
+
+RESULT(v[0])
+
+
+EQUATION("PublicInvestmentHous")
+
+/* Calcul du total des investissements publics pour le secteur du logement. Somme des investissements individuels alloués dans ce secteur. */
+
+v[0] = SUM("PubInvestmentHous");  // Somme des investissements dans le secteur du logement
+
+RESULT(v[0])
+
+
+
+EQUATION("PublicInvestmentInd")
+
+/* Calcul du total des investissements publics pour le secteur industriel. Somme des investissements individuels alloués dans ce secteur. */
+
+v[0] = SUM("PubInvestmentInd");  // Somme des investissements dans le secteur industriel
+
+RESULT(v[0])
+
+
+EQUATION("PublicInvestmentTC")
+
+/* Calcul du total des investissements publics pour le secteur des technologies et communications. Somme des investissements individuels alloués dans ce secteur. */
+
+v[0] = SUM("PubInvestmentTC");  // Somme des investissements dans le secteur des technologies et communications
+
+RESULT(v[0])
+
+
+
+
+
+
+/*MENAGES ELECTEURS ET CONSOMMATEURS*/ 
+/*MENAGES ELECTEURS ET CONSOMMATEURS*/ 
+/*MENAGES ELECTEURS ET CONSOMMATEURS*/ 
+/*MENAGES ELECTEURS ET CONSOMMATEURS*/ 
+/*MENAGES ELECTEURS ET CONSOMMATEURS*/ 
+/*MENAGES ELECTEURS ET CONSOMMATEURS*/ 
+/*MENAGES ELECTEURS ET CONSOMMATEURS*/ 
+/*MENAGES ELECTEURS ET CONSOMMATEURS*/ 
+/*MENAGES ELECTEURS ET CONSOMMATEURS*/ 
+
+
+
 
 EQUATION("NeedsIndex")
 /*
