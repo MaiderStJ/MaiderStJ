@@ -125,6 +125,61 @@ MODELBEGIN
 
 
 
+EQUATION("RestOfTheWorld")
+/*
+Comment
+*/
+
+v[0] = V("OP");
+
+RESULT( v[0])
+
+
+
+
+
+
+EQUATION("Production")
+/*
+Aggregate Production
+*/
+
+v[0] = V("TotalConsumption");
+v[1] = V("TotalInvestment");
+v[2] = V("TotalPublicSpending");
+
+v[7] = v[0] + v[1] + v[2];
+
+RESULT( v[7])
+
+
+EQUATION("TotalConsumption")
+/*
+Comment
+*/
+
+v[0] = SUM("Consumption");
+
+RESULT( v[0])
+
+
+
+EQUATION("TotalPublicSpending")
+/*
+Comment
+*/
+
+v[0] = V("UnemploymentBenefitProgramme");  // Coût des allocations chômage
+v[1] = V("CostJobGuarantee");              // Coût du programme d'emploi garanti
+v[2] = V("TotalRed");                           // Autres transferts ou aides
+v[3] = V("PubSpendPubServ");               // Dépenses pour les services publics
+v[4] = V("ReskillingProgrammeCost");       // Coût du programme de requalification professionnelle
+v[5] = V("TotalPublicInvestment");         // Total des investissements publics
+v[6] = V("TotalSubsidies");                // Total des subventions publiques
+
+v[7] = v[0] + v[1] + v[2] + v[3] + v[4] + v[5] + v[6];
+
+RESULT( v[7])
 
 
 
@@ -258,8 +313,6 @@ if (v[4] > 0) {
 RESULT(v[5])
 
 
-
-
 EQUATION("CostJobGuarantee")
 /*
 Calcul des coûts totaux liés au programme de garantie d'emploi.
@@ -273,6 +326,26 @@ v[1] = 0;                 // Coût total initialisé à 0
 CYCLE(cur, "Households") { // Parcours de tous les agents dans la branche "Households"
     if (VS(cur, "Status") == 3) {  // Vérifie si l'agent est dans le programme (statut = 3)
         v[1] += v[0];              // Ajoute le salaire minimum au coût total
+    }
+}
+
+RESULT(v[1])  // Retourne le coût total
+
+
+
+EQUATION("UnemploymentBenefitProgramme")
+/*
+Calcul des coûts totaux liés aux politiques d'assurance chômage.
+Le coût est égal à la somme des rémunérations des bénéficiaires (statut = 0 ou = 4).
+*/
+
+// Initialisation du coût total
+v[0] = V("UnemploymentBenefit");  // Allocation chômage
+v[1] = 0;                 // Coût total initialisé à 0
+
+CYCLE(cur, "Households") { // Parcours de tous les agents dans la branche "Households"
+    if (VS(cur, "Status") == 0 || VS(cur, "Status") == 4) {  // Vérifie si l'agent perçoit les aides (chômeur - statut = 3 ou en formation - statut = 4)
+        v[1] += v[0];              // Ajoute les compensations chômage au coût total
     }
 }
 
@@ -1290,181 +1363,102 @@ FUNCTION("Purchase")
 /*
 Fonction correspondant au processus d'achat du client
 */
-v[40]=VS(c,"a");
-v[41]=VS(c,"b");
-v[42]=VS(c,"c");
-v[43]=VS(c,"d");
-v[44]=v[40]+v[41]+v[42]+v[43];
-v[0]=v[40]/v[44];// pour que la somme des pref fasse 1
-v[1]=v[41]/v[44];
-v[2]=v[42]/v[44];
-v[3]=v[43]/v[44];
-v[4]=VS(c,"e");
-v[30]=VS(c,"Reservation_Price");
-v[31]=VS(c,"Reservation_X");
-v[34]=VS(c,"Alpha_Regu_Households");
-v[22]=V("A");//pour X
-v[23]=V("B");//pour Price
-v[24]=V("C");//pour Tox
-v[25]=V("D");//pour Bio
-v[35]=V("Sunset_Date");
-v[36]=V("Revision_Period");
+v[40] = VS(c, "a");
+v[41] = VS(c, "b");
+v[42] = VS(c, "c");
+v[43] = VS(c, "d");
+v[44] = v[40] + v[41] + v[42] + v[43];
+v[0] = v[40] / v[44]; // pour que la somme des pref fasse 1
+v[1] = v[41] / v[44];
+v[2] = v[42] / v[44];
+v[3] = v[43] / v[44];
+v[4] = VS(c, "e");
+v[30] = VS(c, "Reservation_Price");
+v[31] = VS(c, "Reservation_X");
+v[34] = VS(c, "Alpha_Regu_Households");
+v[22] = V("A"); // pour X
+v[23] = V("B"); // pour Price
+v[24] = V("C"); // pour Tox
+v[25] = V("D"); // pour Bio
+v[35] = V("Sunset_Date");
+v[36] = V("Revision_Period");
 
-v[18]=UNIFORM(0,0.1);//alea pour eviter pb de MS=0 => U=0
+v[18] = UNIFORM(0, 0.1); // alea pour éviter pb de MS=0 => U=0
 
-v[27]=0;
+v[27] = 0;
 
-v[8]=UNIFORM(0,1);
+v[8] = UNIFORM(0, 1);
 
-if(v[8]<=v[0])//on cherche la dimension a retenir en fonction des preferences du client
-{
-CYCLE(cur, "Product_Purchase")// calcul l'utilite de chaque produit en retenant que X
- {
-  v[5]=VS(cur,"Purchase_X");
-	v[6]=VS(cur,"Purchase_Price");
-  v[9]=VS(cur,"Purchase_MS");
-  v[17]=VS(cur,"Purchase_IsAdopted");
-  v[33]=VS(cur,"Purchase_Portfolio");
-  v[50]=V("Error");//pour terme d'erreur !!!!!!
-  v[51]=UNIFORM(1-v[50],1+v[50]);//terme d'erreur !!!!!
+// CYCLE pour chaque secteur de l'économie
+for (int sectorId = 1; sectorId <= 6; ++sectorId) {
+    // CYCLE pour parcourir les firmes d'un secteur donné
+    CYCLE(cur, "Firm") {
+        v[5] = VS(cur, "IdSector"); // Récupère le secteur de la firme
+        if (v[5] == sectorId) { // Si la firme appartient au secteur en cours
+            v[6] = VS(cur, "Firm_Price"); // Récupère le prix de la firme
+            v[9] = VS(cur, "Firm_MS"); // Récupère la part de marché de la firme
+            v[17] = VS(cur, "Firm_IsAdopted"); // Récupère si la firme a été adoptée
+            v[33] = VS(cur, "Firm_Portfolio"); // Récupère le portefeuille de la firme
+            v[50] = V("Error"); // Terme d'erreur
+            v[51] = UNIFORM(1 - v[50], 1 + v[50]); // Terme d'erreur
 
- 
-	if(v[6]>v[30]||v[5]<v[31])//si prix sup au prix de reserve et la perf X inf au seuil min
-	v[10]=0;// ut = 0
- 	else
- 	{
- 		if(v[33]==0)//si la firme n'a pas la technologie 2 dans son portefeuille
- 		v[10]=(1-v[34]*t/(v[35]+v[36]))*(v[17]*(v[5]*v[51]-v[22])*pow(v[9]+v[18],v[4]));//!!!!
- 		else
-  		v[10]=v[17]*(v[5]*v[51]-v[22])*pow(v[9]+v[18],v[4]);//!!!!!
-  }
-  WRITES(cur,"Utility",v[10]);
-	v[27]=v[27]+v[10];
- }
+            // Calcul de l'utilité basée sur le secteur et les caractéristiques de la firme
+            if (v[6] > v[30] || v[5] < v[31]) { // Si le prix est supérieur au prix de réserve ou la performance est inférieure au seuil
+                v[10] = 0; // Utilité = 0
+            } else {
+                if (v[33] == 0) { // Si la firme n'a pas la technologie 2
+                    v[10] = (1 - v[34] * t / (v[35] + v[36])) * (v[17] * (v[5] * v[51] - v[22]) * pow(v[9] + v[18], v[4]));
+                } else {
+                    v[10] = v[17] * (v[5] * v[51] - v[22]) * pow(v[9] + v[18], v[4]);
+                }
+            }
+            WRITES(cur, "Utility", v[10]); // Enregistre l'utilité de la firme
+            v[27] = v[27] + v[10]; // Additionne l'utilité totale
+        }
+    }
 }
 
-if(v[8]>v[0]&&v[8]<=(v[0]+v[1]))
-{
-CYCLE(cur, "Product_Purchase")// calcul l'utilite de chaque produit en retenant que Price
- {
-  v[5]=VS(cur,"Purchase_X");
-	v[6]=VS(cur,"Purchase_Price");
-  v[9]=VS(cur,"Purchase_MS");
-  v[17]=VS(cur,"Purchase_IsAdopted");
-  v[33]=VS(cur,"Purchase_Portfolio");
-  v[50]=V("Error");//pour terme d'erreur !!!!!!
-  v[51]=UNIFORM(1-v[50],1+v[50]);//terme d'erreur !!!!!
-
- 
-	if(v[6]>v[30]||v[5]<v[31])//si prix sup au prix de reserve et la perf X inf au seuil min
-	v[10]=0;// ut = 0
- 	else
- 	{
- 		if(v[33]==0)//si la firme n'a pas la technologie 2 dans son portefeuille
- 		v[10]=(1-v[34]*t/(v[35]+v[36]))*(v[17]*(v[23]-v[6]*v[51])*pow(v[9]+v[18],v[4]));//!!!!!
- 		else
-  		v[10]=v[17]*(v[23]-v[6]*v[51])*pow(v[9]+v[18],v[4]);//!!!!!
-  }
-  WRITES(cur,"Utility",v[10]);
-	v[27]=v[27]+v[10];
- }
+// Processus d'achat en fonction des utilités des firmes de chaque secteur
+if (v[27] == 0) { // Si les utilités sont toutes nulles
+    WRITES(c, "Product_Type", 0); // Enregistre le type de produit (ici, pas de produit sélectionné)
+    END_EQUATION(0);
 }
 
-if(v[8]>(v[0]+v[1])&&v[8]<=(v[0]+v[1]+v[2]))
-{
-CYCLE(cur, "Product_Purchase")// calcul l'utilite de chaque produit en retenant que Tox
- {
-  v[5]=VS(cur,"Purchase_X");
-	v[6]=VS(cur,"Purchase_Price");
-	v[7]=VS(cur,"Purchase_Tox");
-  v[9]=VS(cur,"Purchase_MS");
-  v[17]=VS(cur,"Purchase_IsAdopted");
-  v[33]=VS(cur,"Purchase_Portfolio");
-  v[50]=V("Error");//pour terme d'erreur !!!!!!
-  v[51]=UNIFORM(1-v[50],1+v[50]);//terme d'erreur !!!!!
+cur = RNDDRAW("Firm", "Utility"); // Choisit une firme avec tirage aléatoire proportionnel aux utilités
 
- 
-	if(v[6]>v[30]||v[5]<v[31])//si prix sup au prix de reserve et la perf X inf au seuil min
-	v[10]=0;// ut = 0
- 	else
- 	{
- 		if(v[33]==0)//si la firme n'a pas la technologie 2 dans son portefeuille
- 		v[10]=(1-v[34]*t/(v[35]+v[36]))*(v[17]*(v[24]-v[7]*v[51])*pow(v[9]+v[18],v[4]));//!!!!!
- 		else
-  		v[10]=v[17]*(v[24]-v[7]*v[51])*pow(v[9]+v[18],v[4]);//!!!!!!
-  }
-  WRITES(cur,"Utility",v[10]);
-	v[27]=v[27]+v[10];
- }
+v[11] = VS(cur, "IdFirm"); // Récupère l'identifiant de la firme choisie
+WRITES(c, "Product_Type", v[11]); // Enregistre le type de produit acheté (ici, l'ID de la firme)
+
+// CYCLE pour augmenter les ventes en fonction de la consommation monétaire du secteur
+CYCLE(cur1, "Firm") {
+    v[13] = VS(cur1, "IdFirm");
+
+    if (v[13] == v[11]) { // Si la firme correspond à celle choisie
+        INCRS(cur1, "Sales", 1); // Augmente les ventes de la firme choisie d'une unité
+
+        // Selon le secteur, augmente les ventes du produit par la consommation du secteur
+        if (v[5] == 1) { // Agriculture
+            v[14] = VS(c, "ConsAgTot");
+        } else if (v[5] == 2) { // Énergie
+            v[14] = VS(c, "ConsEnerTot");
+        } else if (v[5] == 3) { // Logement
+            v[14] = VS(c, "ConsHousTot");
+        } else if (v[5] == 4) { // Transports
+            v[14] = VS(c, "ConsTransTot");
+        } else if (v[5] == 5) { // Industrie
+            v[14] = VS(c, "ConsIndTot");
+        } else if (v[5] == 6) { // Technologie/Communication
+            v[14] = VS(c, "ConsTCTot");
+        } else {
+            v[14] = 0; // Valeur par défaut, si secteur inconnu
+        }
+
+        // Ajout de la consommation monétaire au `Sales_Prod`
+        INCRS(cur1, "Sales_Prod", v[14]);
+    }
 }
 
-if(v[8]>(v[0]+v[1]+v[2]))
-{
-CYCLE(cur, "Product_Purchase")// calcul l'utilite de chaque produit en retenant que Bio
- {
-  v[5]=VS(cur,"Purchase_X");
-	v[6]=VS(cur,"Purchase_Price");
-	v[7]=VS(cur,"Purchase_Bio");
-  v[9]=VS(cur,"Purchase_MS");
-  v[17]=VS(cur,"Purchase_IsAdopted");
-  v[33]=VS(cur,"Purchase_Portfolio");
-  v[50]=V("Error");//pour terme d'erreur !!!!!!
-  v[51]=UNIFORM(1-v[50],1+v[50]);//terme d'erreur !!!!!
-
- 
-	if(v[6]>v[30]||v[5]<v[31])//si prix sup au prix de reserve et la perf X inf au seuil min
-	v[10]=0;// ut = 0
- 	else
- 	{
- 		if(v[33]==0)//si la firme n'a pas la technologie 2 dans son portefeuille
- 		v[10]=(1-v[34]*t/(v[35]+v[36]))*(v[17]*(v[25]-v[7]*v[51])*pow(v[9]+v[18],v[4]));//!!!!!!
- 		else
-  		v[10]=v[17]*(v[25]-v[7]*v[51])*pow(v[9]+v[18],v[4]);//!!!!!!
-  }
-  WRITES(cur,"Utility",v[10]);
-	v[27]=v[27]+v[10];
- }
-}
-
-
-if(v[27]==0)//si les utilites sont toutes nulles
-{
-	WRITES(c,"Product_Type",0);// inscrit le type de produit achete dans l'objet Household
-	END_EQUATION(0);
-}
-
-cur=RNDDRAW("Product_Purchase","Utility");//choisit le produit avec tirage aleatoire proportionnel aux utilites
-
-v[11]=VS(cur,"IdFirm_Purchase");// recupere l'identifiant de la firme choisie
-v[12]=VS(cur,"IdProduct_Purchase");// recupere le type de produit choisi
-WRITES(c,"Product_Type",v[12]);// inscrit le type de produit achete dans l'objet Household
-
-
-CYCLE(cur1, "Firm")
-{
-
-	v[13]=VS(cur1,"IdFirm");
-
-	if(v[13]==v[11])//repere la firme selectionnee
- 	{
- 		INCRS(cur1,"Sales",1);// augmente les vente de la firme selectionnee d'une unite
-  	CYCLES(cur1, cur2, "Product")
-   	{
-   		v[14]=VS(cur2,"IdProduct");
-  			if(v[14]==v[12])
-   			{
-   				INCRS(cur2,"Sales_Prod",1);// augmente les ventes du produit de 1
-    				
-   			}
-   		}
- 	}
-}
-
-
-RESULT(v[11] )// retourne l'identifiant de la firme selectionnee
-
-
-
+RESULT(v[11]); // Retourne l'identifiant de la firme sélectionnée
 
 /*
 LABOUR MARKET
@@ -2079,7 +2073,7 @@ v[0] = V("GreenLoanInterestRate");   // Taux d'intérêt des prêts verts
 v[1] = V("LoanInterestRate");   // Taux d'intérêt des prêts bruns
 v[2] = V("GreenLoans"); // Montant total des prêts verts
 v[3] = V("BrownLoans"); // Montant total des prêts bruns
-v[4] = V("Dep");   // Montant total des dépôts
+v[4] = V("Savings");   // Montant total des dépôts
 v[5] = V("DepositInterestRate");     // Taux d'intérêt payé sur les dépôts
 v[6] = V("LoanRateCons");
 v[7] = V("LoanCons");
@@ -2492,6 +2486,42 @@ EQUATION("rho_V")
 
 
 /*EQUATIONS RELATIVES A L'ACCUMULATION DU CAPITAL*/
+
+
+EQUATION("TotalInvestment")
+/*
+Comment
+*/
+
+v[0] = V("TotalBrownInvestment");
+v[1] = V("TotalGreenInvestment");
+
+v[2] = v[0] + v[1];
+
+RESULT( v[2])
+
+
+
+EQUATION("TotalBrownInvestment")
+/*
+Calcule l'investissement brun total en sommant les investissements bruns de toutes les firmes.
+*/
+
+v[0] = SUM("Brown Investment");  // Somme des investissements bruns des firmes
+
+RESULT(v[0])
+
+
+
+
+EQUATION("TotalGreenInvestment")
+/*
+Calcule l'investissement vert total en sommant les investissements verts de toutes les firmes.
+*/
+
+v[0] = SUM("Green Investment");  // Somme des investissements verts des firmes
+
+RESULT(v[0])
 
 
 
@@ -5356,5 +5386,3 @@ void close_sim(void)
 {
 
 }
-
-
