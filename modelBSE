@@ -5090,24 +5090,50 @@ if(t==(v[0]+v[1]))
 	v[3]=VL("Average_X_T2",1);
 	v[4]=V("Target_Eff");
 	v[5]=V("Target_X");
+	WRITE("Postponement",0);//initialise a 0
 
-	if(v[2]>=v[4]&&v[3]>=v[5])//si les seuils sont satisfaits on interdit le produit 1
+	if(v[2]>=v[4]&&v[3]>=v[5])//si les seuils sont satisfaits on regarde le nb de firmes restantes
 	{
-		v[6]=1;
-		WRITE("ExitP1_Date",t);// enregistre la periode a laquelle le produit 1 est interdit
-		PARAMETER;
+		v[10]=0;
+		CYCLE(cur, "Firm")//compte le nb de sorties en cas d'interdiction de T1
+ 			{
+  				v[11]=VS(cur,"Portfolio");
+  				if(v[11]==0)
+  				v[10]=v[10]+1;
+ 			}
+ 
+ 		v[12]=V("Target_NbFirms");
+ 		v[13]=VL("NbFirms",1);
+ 
+ 		if(v[13]-v[10]>=v[12])//si le nb de firmes restantes est sup ou egal a Target_NbFirms => interdiction de T1
+		{
+			WRITE("ExitP1_Date",t);// enregistre la periode a laquelle le produit 1 est interdit
+			PARAMETER;
+			END_EQUATION(1);
+		}
+
+		if(v[13]<v[12]&&v[10]==0)// si initialement le nb de firmes est deja inf a Target_NbFirms mais l'interdiction ne dégrade pas davantage le degre de concu => interdiction de T1
+		{
+			WRITE("ExitP1_Date",t);// enregistre la periode a laquelle le produit 1 est interdit
+			PARAMETER;
+			END_EQUATION(1);
+		}
+			v[6]=0;//pas d'interdiction;
+			INCR("Nb_Postponement",1);//nb cumule de reports
+			INCR("Nb_Postponement_T1",1);//nb cumule de reports sur l'interdiction de T1
+			WRITE("Postponement",1);//report de la reglementation
 	}
-	else
+	else//si les seuils ne sont pas satisfaits 
 	{
 		v[6]=0;
-		v[7]=V("Revision_Period_Update");// mise a jour de la periode de revision
-		INCR("Revision_Period",v[7]);
 	}
 }
 else
 v[6]=0;
 
 RESULT( v[6])
+
+
 
 
 /*EQUATIONS D'INITIALISATION*/
