@@ -83,6 +83,34 @@ MODELBEGIN
 
 
 
+/*EQUATIONS D'INITALISATION*/
+/*EQUATIONS D'INITALISATION*/
+/*EQUATIONS D'INITALISATION*/
+/*EQUATIONS D'INITALISATION*/
+/*EQUATIONS D'INITALISATION*/
+/*EQUATIONS D'INITALISATION*/
+/*EQUATIONS D'INITALISATION*/
+/*EQUATIONS D'INITALISATION*/
+/*EQUATIONS D'INITALISATION*/
+/*EQUATIONS D'INITALISATION*/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /*EQUATIONS GENERALES*/
 /*EQUATIONS GENERALES*/
@@ -445,6 +473,8 @@ RESULT(v[0])
 
 
 
+
+
 /*MENAGES ELECTEURS ET CONSOMMATEURS*/ 
 /*MENAGES ELECTEURS ET CONSOMMATEURS*/ 
 /*MENAGES ELECTEURS ET CONSOMMATEURS*/ 
@@ -580,100 +610,142 @@ RESULT(v[8])
 
 
 
-
-
-EQUATION("HouseholdConsumption")
+EQUATION("Income")
 /*
-Détermination de la consommation d'un ménage en fonction de son statut d'emploi.
-Les statuts sont représentés par des valeurs numériques :
-0 = Unemployed, 1 = EmployedBrown, 2 = EmployedGreen.
-Inclut FinPosHH comme source de revenus supplémentaires.
+Calcul du revenu individuel des ménages en fonction de leur statut d'emploi et de leur employeur.
+- Status = 0 : Allocation chômage (UnemploymentBenefit)
+- Status = 1 : Salaire brun peu qualifié (LowSkilledBrownWage de la firme IdFirm)
+- Status = 2 : Salaire vert peu qualifié (LowSkilledGreenWage de la firme IdFirm)
+- Status = 3 : Salaire minimum (MinimumWage)
+- Status = 4 : Allocation chômage (UnemploymentBenefit)
+- Status = 5 : Salaire brun hautement qualifié (HighSkilledBrownWage de la firme IdFirm)
+- Status = 6 : Salaire vert hautement qualifié (HighSkilledGreenWage de la firme IdFirm)
 */
 
-// Récupération des variables pertinentes
-v[0] = V("UnemploymentBenefit");  // Allocation chômage fixe
-v[1] = V("PropensityToConsume");  // Propension marginale à consommer
-v[2] = V("BaseConsumption");      // Niveau de consommation minimum
-v[3] = V("Status");               // Statut du ménage : 0, 1 ou 2
-v[4] = V("FinPosHH");             // Position financière nette du ménage
-v[5] = V("LoanCons");             // Dette de consommation actuelle du ménage
-v[6] = V("IdHousehold");          // Identifiant du ménage pour récupérer l'employeur
+v[0] = V("Status");  // Récupération du statut du ménage
+v[2] = V("IdFirm");  // Récupération de l'identifiant de la firme
 
-// Création de la chaîne pour l'ID de la firme
-char firmIdStr[50];  // Créer un tableau de char pour stocker l'ID sous forme de chaîne
-sprintf(firmIdStr, "households[%d].IdFirm", static_cast<int>(v[6]));  // Convertir l'ID du ménage en chaîne
-v[7] = V(firmIdStr);  // Récupérer l'ID de la firme
-
-// Création des chaînes pour les salaires
-char salaryBrownStr[50], salaryGreenStr[50];
-sprintf(salaryBrownStr, "firms[%d].salaryBrown", static_cast<int>(v[6]));  // Convertir l'ID de la firme en chaîne
-sprintf(salaryGreenStr, "firms[%d].salaryGreen", static_cast<int>(v[6]));  // Convertir l'ID de la firme en chaîne
-v[8] = V(salaryBrownStr);  // Salaire pour un emploi brown
-v[9] = V(salaryGreenStr);  // Salaire pour un emploi green
-
-// Détermination du salaire en fonction du statut du ménage
-switch (static_cast<int>(v[3])) { 
-    case 0: // Unemployed
-        if ((v[0] + v[4]) < v[2]) { // Revenus (allocation + FinPosHH) insuffisants
-            v[10] = v[2] - (v[0] + v[4]); // Besoin d'endettement
-            v[5] += v[10];                // Augmenter la dette de consommation
-            v[11] = v[2];                 // Consommation au niveau de base
-        } else {
-            v[11] = v[0] + v[4];          // Allocation et FinPosHH suffisants
+if (v[0] == 0 || v[0] == 4) {  
+    v[1] = V("UnemploymentBenefit");  // Allocation chômage
+} else if (v[0] == 3) {  
+    v[1] = V("MinimumWage");  // Salaire minimum
+} else {  
+    CYCLE(cur, "Firms")  // Parcours de toutes les firmes
+        if (VLS(cur, "IdFirm", 1) == v[2]) {  // Vérifie si la firme correspond à IdFirm
+            if (v[0] == 1) {  
+                v[1] = VS(cur, "LowSkilledBrownWage");  
+            } else if (v[0] == 2) {  
+                v[1] = VS(cur, "LowSkilledGreenWage");  
+            } else if (v[0] == 5) {  
+                v[1] = VS(cur, "HighSkilledBrownWage");  
+            } else if (v[0] == 6) {  
+                v[1] = VS(cur, "HighSkilledGreenWage");  
+            } else {  
+                v[1] = 0;  // Cas par défaut si Status est inconnu
+            }
+            break;  // On sort du CYCLE dès qu'on a trouvé la bonne firme
         }
-        break;
-
-    case 1: // EmployedBrown
-        if ((v[8] + v[4]) < v[2]) { // Revenus (salaire brown + FinPosHH) insuffisants
-            v[10] = v[2] - (v[8] + v[4]); // Besoin d'endettement
-            v[5] += v[10];                // Augmenter la dette de consommation
-            v[11] = v[2];                 // Consommation au niveau de base
-        } else {
-            v[11] = v[2] + v[1] * (v[8] + v[4]); // Consommation basée sur les revenus
-        }
-        break;
-
-    case 2: // EmployedGreen
-        if ((v[9] + v[4]) < v[2]) { // Revenus (salaire green + FinPosHH) insuffisants
-            v[10] = v[2] - (v[9] + v[4]); // Besoin d'endettement
-            v[5] += v[10];                // Augmenter la dette de consommation
-            v[11] = v[2];                 // Consommation au niveau de base
-        } else {
-            v[11] = v[2] + v[1] * (v[9] + v[4]); // Consommation basée sur les revenus
-        }
-        break;
-
-    default:
-        v[11] = 0;  // Sécurité : consommation nulle pour un statut inconnu
 }
 
-// Mettre à jour la variable LoanCons pour stocker la nouvelle dette
-WRITE("LoanCons", v[5]);
-
-RESULT(v[11]) // Retourner la consommation calculée
+RESULT(v[1])  // Retourne le revenu individuel du ménage
 
 
-EQUATION("Yfin")
+
+EQUATION("DisposableIncome")
+/*
+Calcul du revenu disponible des ménages.
+Les ressources comprennent :
+- Revenu du travail ou des allocations (Income)
+- Revenu financier (FinancialIncome)
+- Transferts reçus (Red)
+
+Les sorties comprennent :
+- Impôts payés (Taxes)
+- Service de la dette des ménages (HouseholdDebtService)
+*/
+
+v[0] = V("Income");               // Revenu du ménage (travail ou allocations)
+v[1] = V("FinancialIncome");      // Revenu financier
+v[2] = V("Red");                  // Transferts reçus
+v[3] = V("Taxes");                // Impôts payés
+v[4] = V("HouseholdDebtService"); // Service de la dette
+
+// Calcul du revenu disponible : ressources - sorties
+v[5] = (v[0] + v[1] + v[2]) - (v[3] + v[4]);
+
+RESULT(v[5])  // Retourne le revenu disponible du ménage
+
+
+EQUATION("HouseholdDebtService")
+/*
+Calcul du service de la dette des ménages.
+Le service de la dette correspond aux intérêts payés sur la dette totale des ménages.
+Il est calculé comme le produit de la dette totale des ménages (HouseholdTotalDebt, valeur lag) par le taux d'intérêt sur les crédits à la consommation (LoanRateCons).
+*/
+
+v[0] = VL("HouseholdTotalDebt", 1); // Dette totale des ménages (valeur lag de 1)
+v[1] = V("LoanRateCons");           // Taux d'intérêt sur les crédits à la consommation
+
+RESULT(v[0] * v[1])  // Retourne le service de la dette
+
+
+
+EQUATION("Consumption")
+/*
+Modélisation de la consommation des ménages.
+Les ménages consomment en fonction de leur revenu disponible, de leur épargne et de leur capacité d'endettement.
+
+- BaseConsumption : consommation minimale incompressible.
+- Si DisposableIncome + Savings (VL 1) > BaseConsumption, le ménage consomme un montant supplémentaire (AdditionalConsumption).
+- Si BaseConsumption > DisposableIncome + Savings (VL 1), le ménage s'endette (HouseholdDebt) pour régler BaseConsumption, sans consommer au-delà.
+- La valeur de HouseholdDebt doit être ajoutée à HouseholdTotalDebt.
+*/
+
+v[0] = V("BaseConsumption");      // Consommation de base incompressible
+v[1] = V("DisposableIncome");     // Revenu disponible du ménage
+v[2] = VL("Savings", 1);          // Épargne du ménage (valeur lag)
+v[3] = V("PropensityToConsumeDI"); // Propension à consommer le revenu disponible
+v[4] = V("PropensityToConsumeSavings"); // Propension à consommer l'épargne
+v[5] = V("HouseholdDebt");        // Endettement du ménage
+v[6] = V("HouseholdTotalDebt");   // Dette totale du ménage
+
+v[7] = v[1] + v[2];  // Ressources disponibles (revenu + épargne)
+
+if (v[7] >= v[0]) {  
+    // Le ménage peut consommer au-delà de sa consommation de base
+    v[8] = v[0] + v[3] * v[1] + v[4] * v[2];
+} else {  
+    // Le ménage ne peut pas couvrir BaseConsumption avec ses ressources, il s'endette
+    v[8] = v[0];  
+    v[6] += v[5]; // Ajout de HouseholdDebt à HouseholdTotalDebt
+    WRITE("HouseholdTotalDebt", v[6]); // Mise à jour de la dette totale
+}
+
+RESULT(v[8])  // Retourne la consommation totale du ménage
+
+
+
+EQUATION("FinancialIncome")
 /*
 Financial income (interest on deposits)
 */
 
 v[0] = V("DepositInterestRate");
-v[1] = VL("S", 1);
+v[1] = VL("Savings", 1);
 
 v[2] = v[0]*v[1];
 
 RESULT( v[2])
 
 
-EQUATION("Dep")
+EQUATION("Savings")
 /*
 Deposits
 */
 
-v[0] = V("Ydisp");
-v[1] = V("ValDesCons");
-v[2] = VL("Dep", 1);
+v[0] = V("DisposableIncome");
+v[1] = V("Consumption");
+v[2] = VL("Savings", 1);
 
 v[3] = v[2] + (v[0] - v[1]);
 
@@ -1451,117 +1523,134 @@ CYCLE(cur, "Firms") {
 }
 
 
-EQUATION("Status")
-/* Variable représentant le statut d'emploi des ménages (0 = chômage, 1 = emploi brun, 2 = emploi vert).
-   Mise à jour avec la gestion des coûts d'ajustement pour le changement de secteur. */
 
+EQUATION("Status") 
+/* Mise à jour du statut d'emploi des ménages avec les nouveaux types de salaires et les qualifications. */
 v[0] = VL("Status", 1); // Statut de l'emploi du ménage à la période précédente
 v[1] = V("IdHousehold"); // Identifiant du ménage
 v[2] = V("IdFirm"); // Identifiant de l'entreprise à t-1
-v[3] = V("IdSector"); // Secteur de l'entreprise à t-1
+v[3] = V("SkillStatus"); // Statut de qualification du ménage (0 = basse qualification, 1 = haute qualification)
+v[4] = V("TransitionActive"); // Variable déterminant si la transition vers un emploi garanti par l'État est active (1 = oui, 0 = non)
+v[5] = V("ReskillingCounter"); // Compteur pour suivre les années de reskilling
 
-// Récupération des besoins en emplois de l'entreprise
+// Récupération des salaires proposés par l'entreprise et des demandes détaillées
 CYCLE(cur, "Firms") {
     if (v[2] == VS(cur, "IDFirm")) { // Vérification si c'est la bonne entreprise
-        v[10] = VS(cur, "Firm_BrownDemand"); // Demande d'emplois bruns à t-1
-        v[12] = VS(cur, "Firm_GreenDemand"); // Demande d'emplois verts à t-1
+        v[10] = VS(cur, "BrownLowSkilledWage"); // Salaire bas pour les emplois bruns non qualifiés
+        v[11] = VS(cur, "BrownHighSkilledWage"); // Salaire élevé pour les emplois bruns qualifiés
+        v[12] = VS(cur, "GreenLowSkilledWage"); // Salaire bas pour les emplois verts non qualifiés
+        v[13] = VS(cur, "GreenHighSkilledWage"); // Salaire élevé pour les emplois verts qualifiés
+        v[14] = VS(cur, "Firm_BrownLowSkilledDemand"); // Demande d'emplois bruns non qualifiés à t-1
+        v[15] = VS(cur, "Firm_BrownHighSkilledDemand"); // Demande d'emplois bruns qualifiés à t-1
+        v[16] = VS(cur, "Firm_GreenLowSkilledDemand"); // Demande d'emplois verts non qualifiés à t-1
+        v[17] = VS(cur, "Firm_GreenHighSkilledDemand"); // Demande d'emplois verts qualifiés à t-1
     }
 }
-
-v[11] = V("Firm_BrownDemand"); // Demande d'emplois bruns à t
-v[13] = V("Firm_GreenDemand"); // Demande d'emplois verts à t
+v[18] = V("Firm_BrownLowSkilledDemand"); // Demande d'emplois bruns non qualifiés à t
+v[19] = V("Firm_BrownHighSkilledDemand"); // Demande d'emplois bruns qualifiés à t
+v[20] = V("Firm_GreenLowSkilledDemand"); // Demande d'emplois verts non qualifiés à t
+v[21] = V("Firm_GreenHighSkilledDemand"); // Demande d'emplois verts qualifiés à t
 
 // Calcul des postes à pourvoir ou à réduire
-v[20] = max(0, v[11] - v[10]); // Postes bruns disponibles
-v[21] = max(0, v[13] - v[12]); // Postes verts disponibles
-v[22] = max(0, v[10] - v[11]); // Licenciements bruns nécessaires
-v[23] = max(0, v[12] - v[13]); // Licenciements verts nécessaires
+v[22] = max(0, v[18] - v[14]); // Postes bruns non qualifiés disponibles
+v[23] = max(0, v[19] - v[15]); // Postes bruns qualifiés disponibles
+v[24] = max(0, v[20] - v[16]); // Postes verts non qualifiés disponibles
+v[25] = max(0, v[21] - v[17]); // Postes verts qualifiés disponibles
+v[26] = max(0, v[14] - v[18]); // Licenciements bruns non qualifiés nécessaires
+v[27] = max(0, v[15] - v[19]); // Licenciements bruns qualifiés nécessaires
+v[28] = max(0, v[16] - v[20]); // Licenciements verts non qualifiés nécessaires
+v[29] = max(0, v[17] - v[21]); // Licenciements verts qualifiés nécessaires
 
-// Gestion des ménages en emploi
-if (v[0] == 1) // Le ménage est en emploi brun
-{
-    if (v[22] > 0) // L'entreprise doit réduire des emplois bruns
-    {
-        v[30] = V("BrownRetainProbability"); // Probabilité de conserver l'emploi brun
-        if (RND > v[30]) // Le ménage est licencié
-        {
-            v[0] = 0; // Statut chômage
-            v[22] -= 1; // Réduction des licenciements bruns nécessaires
-            v[2] = -1; // Ménage sans employeur après licenciement
-        }
+// Si le ménage est en reskilling, il prend le statut 5 pendant deux ans
+if (v[0] == 5) {
+    v[5] += 1; // Incrémente le compteur de reskilling
+    if (v[5] >= 2) {
+        v[0] = 0; // Après deux ans, le ménage redevient chômeur
+        v[5] = 0; // Réinitialiser le compteur de reskilling
     }
-}
-else if (v[0] == 2) // Le ménage est en emploi vert
-{
-    if (v[23] > 0) // L'entreprise doit réduire des emplois verts
-    {
-        v[31] = V("GreenRetainProbability"); // Probabilité de conserver l'emploi vert
-        if (RND > v[31]) // Le ménage est licencié
-        {
-            v[0] = 0; // Statut chômage
-            v[23] -= 1; // Réduction des licenciements verts nécessaires
-            v[2] = -1; // Ménage sans employeur après licenciement
-        }
+} else {
+    // Si le ménage est au chômage et que la transition vers un emploi garanti par l'État est active
+    if (v[0] == 0 && v[4] == 1) {
+        v[0] = 3; // Le ménage obtient un emploi garanti par l'État
+        v[2] = -1; // Aucune firme associée car c'est un emploi garanti par l'État
+        v[5] = V("MinimumWage"); // Salaire fixé par l'État pour l'emploi garanti
     }
-}
 
-// Embauche dans les emplois bruns
-if (v[0] == 0 && v[20] > 0) // Le ménage est au chômage et des postes bruns sont disponibles
-{
-    v[40] = V("BrownQualificationThreshold"); // Seuil de qualification brun
-    if (V("Qualification") >= v[40]) // Vérifie si le ménage est qualifié
-    {
-        v[0] = 1; // Le ménage est embauché en emploi brun
-        v[2] = v[2]; // Met à jour l'IdFirm avec l'IdFirm de la firme employant le ménage
-        v[20] -= 1; // Réduction du nombre de postes bruns disponibles
-    }
-}
-
-// Embauche dans les emplois verts
-if (v[0] == 0 && v[21] > 0) // Le ménage est au chômage et des postes verts sont disponibles
-{
-    v[41] = V("GreenQualificationThreshold"); // Seuil de qualification vert
-    if (V("Qualification") >= v[41]) // Vérifie si le ménage est qualifié
-    {
-        v[0] = 2; // Le ménage est embauché en emploi vert
-        v[2] = v[2]; // Met à jour l'IdFirm avec l'IdFirm de la firme employant le ménage
-        v[21] -= 1; // Réduction du nombre de postes verts disponibles
-    }
-}
-
-// Gestion des coûts d'ajustement pour les ménages cherchant à changer de secteur
-if (v[0] == 0) // Ménages au chômage cherchent un nouvel emploi
-{
-    v[50] = V("SectorChangeCost"); // Coût de changement de secteur
-    v[60] = -1; // Initialisation du salaire proposé maximal
-
-    CYCLE(cur, "Firms") // Parcours des entreprises
-    {
-        v[51] = VS(cur, "IdSector"); // Secteur de l'entreprise
-        v[52] = VS(cur, "OfferedWage"); // Salaire proposé
-
-        if (v[51] == v[3]) // Entreprises du même secteur
-        {
-            if (v[52] > v[60]) // Recherche du meilleur salaire
-            {
-                v[60] = v[52]; // Met à jour le salaire maximal
-                v[0] = 1; // Statut brun par défaut (secteur inchangé)
-                v[2] = v[2]; // Met à jour l'IdFirm avec l'IdFirm de la firme employant le ménage
+    // Gestion des ménages en emploi
+    if (v[0] == 1) { // Le ménage est en emploi brun non qualifié
+        if (v[22] > 0) { // L'entreprise doit réduire des emplois bruns non qualifiés
+            v[30] = V("BrownLowSkilledRetainProbability"); // Probabilité de conserver l'emploi brun non qualifié
+            if (RND > v[30]) { // Le ménage est licencié
+                v[0] = 0; // Statut chômage
+                v[22] -= 1; // Réduction des licenciements bruns non qualifiés nécessaires
+                v[2] = -1; // Ménage sans employeur après licenciement
             }
         }
-        else // Entreprises d'autres secteurs
-        {
-            if ((v[52] - v[50]) > v[60]) // Arbitrage avec coût d'ajustement
-            {
-                v[60] = v[52] - v[50]; // Salaire net après ajustement
-                v[0] = 2; // Statut vert si le salaire net est plus attractif
-                v[2] = v[2]; // Met à jour l'IdFirm avec l'IdFirm de la firme employant le ménage
+    } else if (v[0] == 2) { // Le ménage est en emploi vert non qualifié
+        if (v[24] > 0) { // L'entreprise doit réduire des emplois verts non qualifiés
+            v[31] = V("GreenLowSkilledRetainProbability"); // Probabilité de conserver l'emploi vert non qualifié
+            if (RND > v[31]) { // Le ménage est licencié
+                v[0] = 0; // Statut chômage
+                v[24] -= 1; // Réduction des licenciements verts non qualifiés nécessaires
+                v[2] = -1; // Ménage sans employeur après licenciement
             }
         }
+    } else if (v[0] == 4) { // Le ménage est en emploi brun qualifié
+        if (v[23] > 0) { // L'entreprise doit réduire des emplois bruns qualifiés
+            v[32] = V("BrownHighSkilledRetainProbability"); // Probabilité de conserver l'emploi brun qualifié
+            if (RND > v[32]) { // Le ménage est licencié
+                v[0] = 0; // Statut chômage
+                v[23] -= 1; // Réduction des licenciements bruns qualifiés nécessaires
+                v[2] = -1; // Ménage sans employeur après licenciement
+            }
+        }
+    } else if (v[0] == 5) { // Le ménage est en emploi vert qualifié
+        if (v[25] > 0) { // L'entreprise doit réduire des emplois verts qualifiés
+            v[33] = V("GreenHighSkilledRetainProbability"); // Probabilité de conserver l'emploi vert qualifié
+            if (RND > v[33]) { // Le ménage est licencié
+                v[0] = 0; // Statut chômage
+                v[25] -= 1; // Réduction des licenciements verts qualifiés nécessaires
+                v[2] = -1; // Ménage sans employeur après licenciement
+            }
+        }
+    }
+
+    // Embauche dans les emplois bruns non qualifiés
+    if (v[0] == 0 && v[22] > 0) { // Le ménage est au chômage et des postes bruns non qualifiés sont disponibles
+        if (v[3] == 0) { // Si le ménage est de basse qualification
+            v[0] = 1; // Le ménage est embauché en emploi brun non qualifié
+            v[2] = v[2]; // Met à jour l'IdFirm avec l'IdFirm de la firme employant le ménage
+            v[22] -= 1; // Réduction du nombre de postes bruns non qualifiés disponibles
+            v[5] = v[10]; // Salaire de l'emploi brun non qualifié
+        }
+    }
+    // Embauche dans les emplois bruns qualifiés
+    if (v[0] == 0 && v[23] > 0 && v[3] == 1) { // Le ménage est au chômage, des postes bruns qualifiés sont disponibles et il a une haute qualification
+        v[0] = 4; // Le ménage est embauché en emploi brun qualifié
+        v[2] = v[2]; // Met à jour l'IdFirm avec l'IdFirm de la firme employant le ménage
+        v[23] -= 1; // Réduction du nombre de postes bruns qualifiés disponibles
+        v[5] = v[11]; // Salaire de l'emploi brun qualifié
+    }
+    // Embauche dans les emplois verts non qualifiés
+    if (v[0] == 0 && v[24] > 0) { // Le ménage est au chômage et des postes verts non qualifiés sont disponibles
+        if (v[3] == 0) { // Si le ménage est de basse qualification
+            v[0] = 2; // Le ménage est embauché en emploi vert non qualifié
+            v[2] = v[2]; // Met à jour l'IdFirm avec l'IdFirm de la firme employant le ménage
+            v[24] -= 1; // Réduction du nombre de postes verts non qualifiés disponibles
+            v[5] = v[12]; // Salaire de l'emploi vert non qualifié
+        }
+    }
+    // Embauche dans les emplois verts qualifiés
+    if (v[0] == 0 && v[25] > 0 && v[3] == 1) { // Le ménage est au chômage, des postes verts qualifiés sont disponibles et il a une haute qualification
+        v[0] = 5; // Le ménage est embauché en emploi vert qualifié
+        v[2] = v[2]; // Met à jour l'IdFirm avec l'IdFirm de la firme employant le ménage
+        v[25] -= 1; // Réduction du nombre de postes verts qualifiés disponibles
+        v[5] = v[13]; // Salaire de l'emploi vert qualifié
     }
 }
 
 RESULT(v[0]) // Retourne le statut d'emploi du ménage
+
 
 
 
@@ -1612,6 +1701,71 @@ CYCLE(cur, "Firms") {
     }
 }
 
+
+EQUATION("BaseWage")
+/*
+Détermine le salaire de base dans une firme en fonction du salaire minimum et d'un facteur de productivité.
+*/
+v[0] = V("MinimumWage");  // Salaire minimum fixé au niveau global
+v[1] = V("ProductivityFactor");  // Facteur de productivité spécifique à la firme
+
+v[2] = v[0] * v[1];
+
+RESULT( v[2])  // Ajustement du salaire en fonction de la productivité
+
+
+
+
+EQUATION("LowSkilledBrownWage")
+/*
+Salaire des travailleurs peu qualifiés dans une firme brune.
+*/
+v[0] = V("BaseWage");  // Salaire de base fixé par la firme
+
+RESULT(v[0])  // Aucun premium pour les travailleurs peu qualifiés bruns
+
+
+
+EQUATION("LowSkilledGreenWage")
+/*
+Salaire des travailleurs peu qualifiés dans une firme verte.
+*/
+v[0] = V("BaseWage");  
+v[1] = V("GreenPremium");  // Prime pour les emplois verts
+
+v[2] = v[0] * (1 + v[1]);
+
+RESULT(v[2])  // Applique la prime verte
+
+
+
+
+
+EQUATION("HighSkilledBrownWage")
+/*
+Salaire des travailleurs qualifiés dans une firme brune.
+*/
+v[0] = V("BaseWage");  
+v[1] = V("SkillPremium");  // Prime pour les emplois qualifiés
+
+v[2] = v[0] * (1 + v[1]);
+
+RESULT( v[2])  // Applique la prime de qualification
+
+
+
+
+EQUATION("HighSkilledGreenWage")
+/*
+Salaire des travailleurs qualifiés dans une firme verte.
+*/
+v[0] = V("BaseWage");  
+v[1] = V("SkillPremium");  
+v[2] = V("GreenPremium"); 
+
+v[3] = v[0] * (1 + v[1] + v[2]);
+ 
+RESULT( v[3])  // Applique les deux primes (qualification + vert)
 
 
 
@@ -5120,11 +5274,6 @@ PARAMETER;
 RESULT( v[0])
 
 
-
-
-
-
-
 EQUATION("Alpha_Regu_Households")
 /*
 parametre de credibite de la reglementation aux yeux des clients
@@ -5207,3 +5356,5 @@ void close_sim(void)
 {
 
 }
+
+
