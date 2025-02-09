@@ -6,14 +6,8 @@
 
 
 
-
-
-
-
 MODELBEGIN
 
-    // Initialisation du modèle
-
 
 /*EQUATIONS D'INITALISATION*/
 /*EQUATIONS D'INITALISATION*/
@@ -25,52 +19,86 @@ MODELBEGIN
 /*EQUATIONS D'INITALISATION*/
 /*EQUATIONS D'INITALISATION*/
 /*EQUATIONS D'INITALISATION*/
+
+
+EQUATION("IdTerritory")
+/*
+Comment
+*/
+
+v[0] = V("IdTerritory");
+
+if ( t == 1 )  // Seulement à la première période
+{
+    if ( RND < 0.25 )  // 25% des cas
+        v[0] = 0;
+    else  // 75% des cas
+        v[0] = 1;
+}
+else
+{
+    v[0] = V("IdTerritory");  // Conserver la valeur initiale
+}
+
+
+RESULT( v[0])
 
 
 
 FUNCTION("InitializeHouseholds")
 
-CYCLE(cur, "Households") {
-    // Utilisation de l'IdHousehold pour attribuer les valeurs
-    v[0] = VS(cur, "IdHousehold");  // IdHousehold du ménage
+if (T == 1) {  // Exécution uniquement à la première période
+    CYCLE(cur, "Households") {
+        // Utilisation de l'IdHousehold pour attribuer les valeurs
+        v[0] = VS(cur, "IdHousehold");  // IdHousehold du ménage
+				v[1] = VS(cur, "IdTerritory");
+        // Attribuer IdTerritory en fonction de l'IdHousehold (45% urbains, 55% ruraux)
+        if (v[0] < 45) {  
+            v[1] = 1;  // Urbain
+        } else {  
+            v[1] = 0;  // Rural
+        }
 
-    // Attribuer IdTerritory en fonction de l'IdHousehold (60% urbains, 40% ruraux)
-    if (v[0] < 60) {  
-        v[1] = 1;  // Urbain
-    } else {  
-        v[1] = 0;  // Rural
-    }
+        // Attribuer SkillStatus en fonction de IdTerritory
+        if (v[1] == 1) {  // Si urbain
+            if (v[0] / 100 < 80) {  // 80% des urbains sont qualifiés
+                v[2] = 1;  // Qualifié
+            } else {
+                v[2] = 0;  // Non qualifié
+            }
+        } else {  // Si rural
+            if (v[0] / 100 < 80) {  // 80% des ruraux sont qualifiés
+                v[2] = 1;  // Qualifié
+            } else {
+                v[2] = 0;  // Non qualifié
+            }
+        }
 
-    // Attribuer SkillStatus en fonction de IdTerritory
-    if (v[1] == 1) {  // Si urbain
-        if (v[0] / 100 < 80) {  // 80% des urbains sont qualifiés
-            v[2] = 1;  // Qualifié
+        // Attribuer Status en fonction de SkillStatus
+        if (v[2] == 0) {  // Si non qualifié (SkillStatus = 0)
+            v[3] = v[0] / 12;  // Status entre 0 et 7
+            // Assurer que les non qualifiés ne peuvent pas avoir un Status de 4 ou 5
+            if (v[3] == 4 || v[3] == 5) {
+                v[3] = v[3] / 2;  // Réattribuer un Status entre 0 et 3
+            }
+        } else {  // Si qualifié (SkillStatus = 1)
+            v[3] = v[0] / 12;  // Status entre 0 et 7
+        }
+
+        // Attribuer IdEmployer pour les ménages en emploi (Status = 1, 2, 5, 6)
+        if (v[3] == 1 || v[3] == 2 || v[3] == 5 || v[3] == 6) {
+            // Associer l'employeur avec l'IdFirm
+            v[4] = VS(cur, "IdFirm");  // IdFirm de la firme pour l'employeur
+            WRITES(cur, "IdEmployer", v[4]);  // Attribuer l'IdEmployer au ménage
         } else {
-            v[2] = 0;  // Non qualifié
+            WRITES(cur, "IdEmployer", -1);  // Si pas en emploi, pas d'employeur
         }
-    } else {  // Si rural
-        if (v[0] / 100 < 80) {  // 80% des ruraux sont qualifiés
-            v[2] = 1;  // Qualifié
-        } else {
-            v[2] = 0;  // Non qualifié
-        }
-    }
 
-    // Attribuer Status en fonction de SkillStatus
-    if (v[2] == 0) {  // Si non qualifié (SkillStatus = 0)
-        v[3] = v[0] / 12;  // Status entre 0 et 7
-        // Assurer que les non qualifiés ne peuvent pas avoir un Status de 4 ou 5
-        if (v[3] == 4 || v[3] == 5) {
-            v[3] = v[3] / 2;  // Réattribuer un Status entre 0 et 3
-        }
-    } else {  // Si qualifié (SkillStatus = 1)
-        v[3] = v[0] / 12;  // Status entre 0 et 7
+        // Écrire les valeurs dans les variables correspondantes
+        WRITES(cur, "IdTerritory", v[1]);
+        WRITES(cur, "SkillStatus", v[2]);
+        WRITES(cur, "Status", v[3]);
     }
-
-    // Écrire les valeurs dans les variables correspondantes
-    WRITES(cur, "IdTerritory", v[1]);
-    WRITES(cur, "SkillStatus", v[2]);
-    WRITES(cur, "Status", v[3]);
 }
 
 RESULT(v[0]);
@@ -249,7 +277,6 @@ v[0] = V("UnemploymentBenefitProgramme");  // Coût des allocations chômage
 v[1] = V("CostJobGuarantee");              // Coût du programme d'emploi garanti
 v[2] = V("TotalRed");                           // Autres transferts ou aides
 v[3] = V("PubSpendPubServ");               // Dépenses pour les services publics
-v[4] = V("ReskillingProgrammeCost");       // Coût du programme de requalification professionnelle
 v[5] = V("TotalPublicInvestment");         // Total des investissements publics
 v[6] = V("TotalSubsidies");                // Total des subventions publiques
 
@@ -263,6 +290,28 @@ v[10] = (v[0] + v[1] + v[2] + v[3] + v[4] + v[5] + v[6])  // Total des dépenses
       - (v[7] + v[8] + v[9]);                            // Total des revenus
 
 RESULT(v[10])
+
+
+EQUATION("TotalRed")
+/*
+Comment
+*/
+
+v[0] = SUM("Red");
+
+RESULT( v[0])
+
+
+
+EQUATION("Taxes")
+/*
+Overall tax burden as a sum of individual taxes.
+*/
+
+v[0] = SUM("TaxesInd");
+
+RESULT( v[0])
+
 
 
 
@@ -290,7 +339,7 @@ Le taux est poussé à la hausse par le ratio Dette/PIB et réduit par la variat
 */
 
 // Récupérer les variables nécessaires
-v[0] = V("GovernmentDebt");           // Stock total de la dette publique
+v[0] = V("GovernmentBonds");           // Stock total de la dette publique
 v[1] = V("GDP");                      // Produit Intérieur Brut (PIB)
 v[2] = V("BondsPurchasedByECB");      // Obligations achetées par la BCE à cette période
 v[3] = VL("BondsPurchasedByECB", 1); // Obligations achetées par la BCE à la période précédente
@@ -332,7 +381,7 @@ Met à jour la variable "Status" à 3 en cas d'acceptation.
 
 // Variables influençant la décision
 v[0] = V("UnemploymentBenefit");  // Allocation chômage de l'agent
-v[1] = V("WagePublicJobs");       // Salaire proposé par l'emploi garanti
+v[1] = V("MinimumWage");       // Salaire proposé par l'emploi garanti
 v[2] = V("DistanceToJob");        // Distance ou coût de déplacement vers l'emploi garanti
 v[3] = V("JobGuaranteeProgram");  // État du programme de garantie d'emploi (1 = actif, 0 = inactif)
 
@@ -370,6 +419,33 @@ CYCLE(cur, "Households") { // Parcours de tous les agents dans la branche "House
 RESULT(v[1])  // Retourne le coût total
 
 
+EQUATION("MinimumWage")
+/*
+Comment
+*/
+
+v[0] = VL("MinimumWage", 1);
+v[1] = V("MinimumWageIncreaseRate");
+
+v[2] = v[0] * (1 + v[1]);
+
+RESULT( v[2])
+
+
+EQUATION("MinimumWageIncreaseRate")
+/*
+Retourne 0.02 si la transition est active (v[0] = 1), sinon retourne 0.
+*/
+
+v[0] = V("TransitionActive");
+
+v[1] = (v[0] == 1 ? 0.02 : 0); // Stocke le résultat dans v[1]
+
+RESULT(v[1]) // Retourne la valeur de v[1]
+
+
+
+
 
 EQUATION("UnemploymentBenefitProgramme")
 /*
@@ -399,9 +475,9 @@ RESULT(v[1])  // Retourne le coût total
 EQUATION("ReskillingPolicy")
 /*
 Modélisation d'une politique de requalification professionnelle.
-Les agents LowSkilled (SkillStatus = 1) peuvent participer à un programme de formation.
+Les agents LowSkilled (SkillStatus = 0) peuvent participer à un programme de formation.
 Pendant leur formation (deux périodes), ils ne sont rémunérés qu'au niveau de l'UnemploymentBenefit,
-et leur variable Status est mise à jour pour refléter leur participation au programme (Status = 5).
+et leur variable Status est mise à jour pour refléter leur participation au programme (Status = 4).
 */
 
 // Initialisation des compteurs
@@ -410,13 +486,13 @@ v[1] = 0;  // Nombre total d'agents ayant terminé leur formation
 v[2] = V("UnemploymentBenefit");  // Allocation chômage
 
 CYCLE(cur, "Households") {  // Parcours de tous les agents de la branche "Households"
-    if (VS(cur, "SkillStatus") == 1) {  // Si l'agent est LowSkilled (travailleur peu qualifié)
+    if (VS(cur, "SkillStatus") == 0) {  // Si l'agent est LowSkilled (travailleur peu qualifié)
         if (VS(cur, "ReskillingTimer") == 0) {  // Si l'agent n'est pas déjà en formation
             v[3] = RND;  // Tirage aléatoire pour simuler la décision d'entrer en formation
             if (v[3] < 0.5) {  // Seulement 50 % des agents acceptent de se requalifier
                 WRITES(cur, "ReskillingTimer", 1);  // Démarre la formation (période 1)
-                WRITES(cur, "Salary", v[2]);        // Rémunération limitée à UnemploymentBenefit
-                WRITES(cur, "Status", 5);          // Met à jour Status à 5 pour représenter la formation
+                WRITES(cur, "Income", v[2]);        // Rémunération limitée à UnemploymentBenefit
+                WRITES(cur, "Status", 4);          // Met à jour Status à 4 pour représenter la formation
                 v[0] += 1;  // Incrémente le compteur des agents en formation
             }
         }
@@ -425,9 +501,9 @@ CYCLE(cur, "Households") {  // Parcours de tous les agents de la branche "Househ
         WRITES(cur, "ReskillingTimer", v[4]);  // Met à jour le timer
 
         if (v[4] >= 2) {  // Si la formation est terminée (après deux périodes)
-            WRITES(cur, "SkillStatus", 2);     // Change le statut à HighSkilled
+            WRITES(cur, "SkillStatus", 1);     // Change le statut à HighSkilled
             WRITES(cur, "ReskillingTimer", 0); // Réinitialise le timer
-            WRITES(cur, "Status", 0);         // Réinitialise le Status à 0 (ou valeur par défaut)
+            WRITES(cur, "Status", 0);         // Réinitialise le Status à 0 (retour au chômage)
             v[1] += 1;                         // Incrémente le compteur des agents formés
         }
     }
@@ -438,11 +514,33 @@ RESULT(v[0])
 
 
 
+EQUATION("UnemploymentBenefitIncreaseRate")
+/*
+Retourne le montant des allocations chômage en fonction de la transition écologique.
+*/
+
+v[0] = V("TransitionActive");
+v[1] = (v[0] == 1 ? 0.02 : 0); // Exemple : 500 si transition active, sinon 300
+
+RESULT(v[1]) // Retourne la valeur de v[1]
+
+
+EQUATION("UnemploymentBenefit")
+/*
+Retourne le montant des allocations chômage en fonction de la transition écologique.
+*/
+
+v[0] = VL("UnemploymentBenefit", 1);
+v[1] = V("UnemploymentBenefitIncreaseRate");
+
+v[2] = v[0] * (1 + v[1]);
+
+RESULT(v[2]) // Retourne la valeur de v[1]
+
+
 
 /*SUBSIDIES*/
 /*SUBSIDIES*/
-
-
 
 
 EQUATION("TotalSubsidies")
@@ -519,8 +617,102 @@ RESULT(v[0])
 
 
 
+
+EQUATION("SubsidyAg")
+/* Subvention pour le secteur Agriculture */
+v[0] = V("GreenInvestment");
+v[1] = V("BrownInvestment");
+v[2] = (v[1] == 0) ? 0 : v[0] / v[1];
+v[3] = (VS(c, "IdSector") == 1) ? v[2] * v[0] : 0;
+RESULT(v[3])
+
+EQUATION("SubsidyEner")
+/* Subvention pour le secteur Énergie */
+v[0] = V("GreenInvestment");
+v[1] = V("BrownInvestment");
+v[2] = (v[1] == 0) ? 0 : v[0] / v[1];
+v[3] = (VS(c, "IdSector") == 2) ? v[2] * v[0] : 0;
+RESULT(v[3])
+
+EQUATION("SubsidyHous")
+/* Subvention pour le secteur Logement */
+v[0] = V("GreenInvestment");
+v[1] = V("BrownInvestment");
+v[2] = (v[1] == 0) ? 0 : v[0] / v[1];
+v[3] = (VS(c, "IdSector") == 3) ? v[2] * v[0] : 0;
+RESULT(v[3])
+
+EQUATION("SubsidyTrans")
+/* Subvention pour le secteur Transport */
+v[0] = V("GreenInvestment");
+v[1] = V("BrownInvestment");
+v[2] = (v[1] == 0) ? 0 : v[0] / v[1];
+v[3] = (VS(c, "IdSector") == 4) ? v[2] * v[0] : 0;
+RESULT(v[3])
+
+EQUATION("SubsidyInd")
+/* Subvention pour le secteur Industrie */
+v[0] = V("GreenInvestment");
+v[1] = V("BrownInvestment");
+v[2] = (v[1] == 0) ? 0 : v[0] / v[1];
+v[3] = (VS(c, "IdSector") == 5) ? v[2] * v[0] : 0;
+RESULT(v[3])
+
+EQUATION("SubsidyTC")
+/* Subvention pour le secteur Technologie et Communication */
+v[0] = V("GreenInvestment");
+v[1] = V("BrownInvestment");
+v[2] = (v[1] == 0) ? 0 : v[0] / v[1];
+v[3] = (VS(c, "IdSector") == 6) ? v[2] * v[0] : 0;
+RESULT(v[3])
+
+
+
+
 /*PUBLIC INVESTMENTS*/
 /*PUBLIC INVESTMENTS*/
+
+
+
+EQUATION("GreenPublicInvestmentRate")
+/*
+Calcule le taux d'investissement public écologique uniquement pour les entreprises sélectionnées comme champions.
+*/
+
+v[0] = VL("GreenCapital", 1); // Investissement vert de la période précédente
+v[1] = VL("BrownCapital", 1); // Investissement brun de la période précédente
+v[3] = VS(c, "IdSector"); // Secteur de l'entreprise
+v[5] = VS(c, "SelectedChampions"); // Vérifier si l'entreprise est un champion
+
+// Seules les entreprises championnes reçoivent un investissement public
+if (v[5] == 1) {
+    if (v[1] == 0)
+        v[2] = 0;
+    else
+        v[2] = 0.1; // Calcul du taux d'investissement
+
+    v[4] = v[2] * v[0]; // Montant total de l'investissement public
+
+    // Attribution par secteur
+    if (v[3] == 1) {
+        WRITES(c, "PubInvestmentAg", v[4]);
+    } else if (v[3] == 2) {
+        WRITES(c, "PubInvestmentEner", v[4]);
+    } else if (v[3] == 3) {
+        WRITES(c, "PubInvestmentHous", v[4]);
+    } else if (v[3] == 4) {
+        WRITES(c, "PubInvestmentTrans", v[4]);
+    } else if (v[3] == 5) {
+        WRITES(c, "PubInvestmentInd", v[4]);
+    } else if (v[3] == 6) {
+        WRITES(c, "PubInvestmentTC", v[4]);
+    }
+} else {
+    v[2] = 0; // Aucun investissement pour les non-champions
+}
+
+RESULT(v[2]) // Retourne le taux d'investissement
+
 
 
 
@@ -635,6 +827,18 @@ v[10] = v[0] * (1 - (v[4] / v[5])) + v[1] * (v[5] / v[6]) + v[2] * v[7];
 RESULT( v[10])
 
 
+EQUATION("MeanDisposableIncome")
+/*
+Mean disposable income in the economy
+*/
+
+v[0] = SUM("DisposableIncome");
+
+v[1] = v[0] / 1200;
+
+RESULT( v[1])
+
+
 EQUATION("Recognition")
 /*
 This equation captures the political effect of austerity versus redistributive policies. It follows the findings on austerity and populism since the 2010's.
@@ -664,7 +868,7 @@ v[3] = v[0] * v[1] * v[2];
 RESULT( v[3])
 
 
-EQUATION("Spatial Justice")
+EQUATION("SpatialJustice")
 /*
 Comment
 */
@@ -681,6 +885,19 @@ v[6] = v[7] * (v[0] * (v[1]/v[2]) + v[5] * v[4]);
 RESULT( v[6])
 
 
+EQUATION("Red")
+/*
+Comment
+*/
+
+v[0] = V("RedistributionRate");
+v[1] = V("Taxes");
+
+v[2] = v[0] * v[1];
+
+RESULT( v[2])
+
+
 
 EQUATION("VoteDecision")
 /*
@@ -689,8 +906,8 @@ Calcul de la décision de vote en fonction de l'évolution du NeedsIndex, du ban
 
 v[0] = V("NeedsIndex");          // Indice de satisfaction des besoins actuel
 v[1] = VL("NeedsIndex", 1);      // Indice de satisfaction des besoins à la période précédente
-v[2] = V("BandwagonEffect");     // Proportion d'agents ayant voté anti-transition à la période précédente
-v[3] = VL("VoteDecision", 1);    // Vote de l'agent à la période précédente (1 = anti-transition, 0 = pro-transition)
+v[2] = V("BandwagonEffect");     // Proportion d'agents ayant basculé vers le vote pro-transition à la période précédente
+v[3] = VL("VoteDecision", 1);    // Vote de l'agent à la période précédente (0 = anti-transition, 1 = pro-transition)
 
 // Pondérations des facteurs influençant la probabilité de voter anti-transition
 v[4] = 0.5;                      // Pondération de l'évolution des besoins
@@ -702,21 +919,50 @@ v[7] = v[4] * (v[0] - v[1]);    // Contribution de l'évolution des besoins
 v[7] = v[7] + v[5] * v[2];      // Ajout de l'effet bandwagon
 v[7] = v[7] + v[6] * v[3];      // Ajout de l'inertie
 
-// Limiter la probabilité de voter anti-transition à [0, 1] sans utiliser MIN et MAX
+// Limiter la probabilité de voter pro-transition à [0, 1]
 if (v[7] < 0) {
     v[7] = 0;  // Si v[7] est inférieur à 0, on le limite à 0
 } else if (v[7] > 1) {
     v[7] = 1;  // Si v[7] est supérieur à 1, on le limite à 1
 }
 
-// Décision de vote : 1 = anti-transition, 0 = pro-transition
+// Décision de vote : 1 = pro-transition, 0 = anti-transition
 if (RND < v[7]) {
-    v[8] = 1; // Vote anti-transition
+    v[8] = 1; // Vote pro-transition
 } else {
-    v[8] = 0; // Vote pro-transition
+    v[8] = 0; // Vote anti-transition
 }
 
 RESULT(v[8])
+
+
+
+FUNCTION("BandwagonEffect")
+
+// Initialisation des compteurs
+v[0] = 0;  // H_{0 -> 1, t-1} : Nombre de ménages passant de 0 à 1
+v[1] = 0;  // H_{1 -> 0, t-1} : Nombre de ménages passant de 1 à 0
+v[2] = COUNT("Households"); // Nombre total de ménages H_t
+
+CYCLE(cur, "Households") {
+    // Récupération des valeurs retardées de VoteDecision
+    v[3] = VLS(cur, "VoteDecision", 2);  // VoteDecision à t-2
+    v[4] = VLS(cur, "VoteDecision", 1);  // VoteDecision à t-1
+
+    // Comptabilisation des transitions
+    if (v[3] == 0 && v[4] == 1) {
+        v[0] += 1;  // Passage de 0 à 1
+    }
+    if (v[3] == 1 && v[4] == 0) {
+        v[1] += 1;  // Passage de 1 à 0
+    }
+}
+
+// Calcul du Bandwagon Effect
+v[5] = v[0] - v[1];  // Solde brut
+v[6] = v[5] / v[2];  // Normalisation par le nombre total de ménages
+
+RESULT(v[5])  // Retourne la valeur brute (ou v[6] pour une version normalisée)
 
 
 
@@ -725,16 +971,16 @@ EQUATION("Income")
 /*
 Calcul du revenu individuel des ménages en fonction de leur statut d'emploi et de leur employeur.
 - Status = 0 : Allocation chômage (UnemploymentBenefit)
-- Status = 1 : Salaire brun peu qualifié (LowSkilledBrownWage de la firme IdFirm)
-- Status = 2 : Salaire vert peu qualifié (LowSkilledGreenWage de la firme IdFirm)
+- Status = 1 : Salaire brun peu qualifié (LowSkilledBrownWage de la firme IdEmployer)
+- Status = 2 : Salaire vert peu qualifié (LowSkilledGreenWage de la firme IdEmployer)
 - Status = 3 : Salaire minimum (MinimumWage)
 - Status = 4 : Allocation chômage (UnemploymentBenefit)
-- Status = 5 : Salaire brun hautement qualifié (HighSkilledBrownWage de la firme IdFirm)
-- Status = 6 : Salaire vert hautement qualifié (HighSkilledGreenWage de la firme IdFirm)
+- Status = 5 : Salaire brun hautement qualifié (HighSkilledBrownWage de la firme IdEmployer)
+- Status = 6 : Salaire vert hautement qualifié (HighSkilledGreenWage de la firme IdEmployer)
 */
 
 v[0] = V("Status");  // Récupération du statut du ménage
-v[2] = V("IdFirm");  // Récupération de l'identifiant de la firme
+v[2] = V("IdEmployer");  // Récupération de l'identifiant employeur de la firme
 
 if (v[0] == 0 || v[0] == 4) {  
     v[1] = V("UnemploymentBenefit");  // Allocation chômage
@@ -778,13 +1024,26 @@ Les sorties comprennent :
 v[0] = V("Income");               // Revenu du ménage (travail ou allocations)
 v[1] = V("FinancialIncome");      // Revenu financier
 v[2] = V("Red");                  // Transferts reçus
-v[3] = V("Taxes");                // Impôts payés
+v[3] = V("TaxesInd");                // Impôts payés
 v[4] = V("HouseholdDebtService"); // Service de la dette
 
 // Calcul du revenu disponible : ressources - sorties
 v[5] = (v[0] + v[1] + v[2]) - (v[3] + v[4]);
 
 RESULT(v[5])  // Retourne le revenu disponible du ménage
+
+
+EQUATION("FinancialIncome")
+/*
+Financial income (interest on deposits)
+*/
+
+v[0] = V("DepositInterestRate");
+v[1] = VL("Savings", 1);
+
+v[2] = v[0]*v[1];
+
+RESULT( v[2])
 
 
 EQUATION("HouseholdDebtService")
@@ -798,6 +1057,19 @@ v[0] = VL("HouseholdTotalDebt", 1); // Dette totale des ménages (valeur lag de 
 v[1] = V("LoanRateCons");           // Taux d'intérêt sur les crédits à la consommation
 
 RESULT(v[0] * v[1])  // Retourne le service de la dette
+
+
+EQUATION("TaxesInd")
+/*
+Comment
+*/
+
+v[1] = V("TaxRate");
+v[2] = V("Income");
+
+v[3] = v[1] * v[2];
+
+RESULT( v[3])
 
 
 
@@ -817,7 +1089,7 @@ v[1] = V("DisposableIncome");     // Revenu disponible du ménage
 v[2] = VL("Savings", 1);          // Épargne du ménage (valeur lag)
 v[3] = V("PropensityToConsumeDI"); // Propension à consommer le revenu disponible
 v[4] = V("PropensityToConsumeSavings"); // Propension à consommer l'épargne
-v[5] = V("HouseholdDebt");        // Endettement du ménage
+v[5] = V("HouseholdNewDebt");        // Endettement du ménage
 v[6] = V("HouseholdTotalDebt");   // Dette totale du ménage
 
 v[7] = v[1] + v[2];  // Ressources disponibles (revenu + épargne)
@@ -827,26 +1099,31 @@ if (v[7] >= v[0]) {
     v[8] = v[0] + v[3] * v[1] + v[4] * v[2];
 } else {  
     // Le ménage ne peut pas couvrir BaseConsumption avec ses ressources, il s'endette
-    v[8] = v[0];  
-    v[6] += v[5]; // Ajout de HouseholdDebt à HouseholdTotalDebt
-    WRITE("HouseholdTotalDebt", v[6]); // Mise à jour de la dette totale
+    v[8] = v[0];
+    v[5] = v[8] - v[7];
+    WRITE("HouseholdNewDebt", v[5]); // Mise à jour de la dette totale
 }
 
 RESULT(v[8])  // Retourne la consommation totale du ménage
 
 
 
-EQUATION("FinancialIncome")
+
+EQUATION("HouseholdTotalDebt")
 /*
-Financial income (interest on deposits)
+Calcul et mise à jour de la dette totale du ménage.
+La dette totale du ménage est mise à jour à chaque période en fonction de l'écart entre DisposableIncome et BaseConsumption.
 */
 
-v[0] = V("DepositInterestRate");
-v[1] = VL("Savings", 1);
+v[0] = VL("HouseholdTotalDebt", 1);   // Dette totale actuelle du ménage
+v[3] = V("HouseholdNewDebt");     // Dette supplémentaire du ménage (calculée dans l'équation précédente)
 
-v[2] = v[0]*v[1];
+// Mise à jour de HouseholdTotalDebt
+v[4] = v[0] + v[3];  // Ajout de la nouvelle dette à la dette totale
 
-RESULT( v[2])
+RESULT(v[4]);  // Retourne la valeur mise à jour de la dette totale
+
+
 
 
 EQUATION("Savings")
@@ -854,67 +1131,18 @@ EQUATION("Savings")
 Deposits
 */
 
-v[0] = V("DisposableIncome");
-v[1] = V("Consumption");
-v[2] = VL("Savings", 1);
+v[0] = VL("DisposableIncome", 1);
+v[1] = VL("Consumption", 1);
+v[2] = VL("Savings", 2);
 
 v[3] = v[2] + (v[0] - v[1]);
 
 RESULT( v[3])
 
 
-EQUATION("FinPosHH")
-/*
-Revenu disponible
-*/
-
-v[0] = V("Yfin");
-v[1] = VL("TotalDebt", 1);
-v[2] = V("ConsumerCreditRisk");
-
-v[3] = v[0] - (v[1] * v[2]);
-
-RESULT( v[3])
-
-
-EQUATION("TotalDebt")
-/*
-Total Debt of households
-*/
-
-v[0] = VL("LoanCons", 1);
-v[1] = V("LoanCons");
-
-v[2] = v[0] + v[1];
-
-RESULT( v[2])
-
-
-
-/*
-EQUATION("ValDesCons")
-
-
-v[0]= V("Ydisp");
-v[1]= V("alpha0");
-v[2]= V("alpha1");
-v[3]= VL("S", 1);
-
-if(V("IrreducibleCons")>(V("Ydisp")+VL("S", 1)))
-{
-v[4] = V("IrreducibleCons"); // Consumption rationing
-}
-else
-{
-v[4] = v[1]*v[0]+v[2]*v[3];
-}
-RESULT(v[4])
-*/
-
-
 EQUATION("ConsAg")
 /*
-Monetary value of irreducible food consumption
+Monetary value of base food consumption
 */
 
 v[0] = VL("ConsAg", 1);
@@ -928,7 +1156,7 @@ RESULT( v[3])
 
 EQUATION("ConsEner")
 /*
-Monetary value of irreducible energy consumption
+Monetary value of base energy consumption
 */
 
 v[0] = VL("ConsEner", 1);
@@ -942,7 +1170,7 @@ RESULT( v[3])
 
 EQUATION("ConsHous")
 /*
-Monetary value of irreducible housing consumption
+Monetary value of base housing consumption
 */
 
 v[0] = VL("ConsHous", 1);
@@ -956,7 +1184,7 @@ RESULT( v[3])
 
 EQUATION("ConsTrans")
 /*
-Monetary value of irreducible transportation consumption
+Monetary value of base transportation consumption
 */
 
 v[0] = VL("ConsTrans", 1);
@@ -968,7 +1196,7 @@ v[3] = v[0]*(1+(v[1]-v[2]));
 RESULT( v[3])
 
 
-EQUATION("BaseCons")
+EQUATION("BaseConsumption")
 /*
 Base consumption.
 */
@@ -988,8 +1216,8 @@ EQUATION("SuppCons")
 Consumption supplementary to irreducible consumption
 */
 
-v[0] = V("ValDesCons");
-v[1] = V("IrreducibleCons");
+v[0] = V("Consumption");
+v[1] = V("BaseConsumption");
 
 v[2] = v[0] - v[1];
 
@@ -1071,32 +1299,28 @@ RESULT( v[2])
 
 EQUATION("NormalizePreferences")
 /*
-Équation qui normalise les préférences de manière à ce que leur somme soit égale à 1.
+Génère des préférences aléatoires pour chaque ménage et les normalise pour que leur somme soit égale à 1.
 */
 
-v[0] = V("AgPref");
-v[1] = V("EnerPref");
-v[2] = V("HousPref");
-v[3] = V("TransPref");
-v[4] = V("IndPref");
-v[5] = V("TCPref");
+v[0] = RND;  // Préférence pour Agriculture
+v[1] = RND;  // Préférence pour Énergie
+v[2] = RND;  // Préférence pour Logement
+v[3] = RND;  // Préférence pour Transport
+v[4] = RND;  // Préférence pour Industrie
+v[5] = RND;  // Préférence pour Technologie
 
-// Calcul de la somme des préférences
+// Calcul de la somme des valeurs aléatoires
 v[6] = v[0] + v[1] + v[2] + v[3] + v[4] + v[5];
 
-// Calcul de l'écart par rapport à 1
-v[7] = 1.0 - v[6];
-
-// Ajustement des préférences pour que la somme soit égale à 1
-WRITE("AgPref", v[0] + v[7] * (v[0] / v[6]));  // Ajuster AgPref
-WRITE("EnerPref", v[1] + v[7] * (v[1] / v[6]));  // Ajuster EnerPref
-WRITE("HousPref", v[2] + v[7] * (v[2] / v[6]));  // Ajuster HousPref
-WRITE("TransPref", v[3] + v[7] * (v[3] / v[6]));  // Ajuster TransPref
-WRITE("IndPref", v[4] + v[7] * (v[4] / v[6]));  // Ajuster IndPref
-WRITE("TCPref", v[5] + v[7] * (v[5] / v[6]));  // Ajuster TCPref
+// Normalisation pour que la somme soit égale à 1
+WRITE("AgPref", v[0] / v[6]);
+WRITE("EnerPref", v[1] / v[6]);
+WRITE("HousPref", v[2] / v[6]);
+WRITE("TransPref", v[3] / v[6]);
+WRITE("IndPref", v[4] / v[6]);
+WRITE("TCPref", v[5] / v[6]);
 
 RESULT(0)
-
 
 
 
@@ -1172,38 +1396,6 @@ v[2] = v[0] + v[1];
 
 RESULT( v[2])
 
-/*
-
-EQUATION("ConsPref")
-
-
-
-v[40]=VS(c,"AgPref");
-v[41]=VS(c,"EnerPref");
-v[42]=VS(c,"HousPref");
-v[43]=VS(c,"TransPref");
-v[44]=VS(c,"IndPref");
-v[45]=VS(c,"TCPref");
-
-v[46]=v[40]+v[41]+v[42]+v[43]+v[44]+v[45];
-v[0]=v[40]/v[46];
-v[1]=v[41]/v[46];
-v[2]=v[42]/v[46];
-v[3]=v[43]/v[46];
-v[4]=v[44]/v[46];
-v[5]=v[45]/v[46];
-
-RESULT( )
-
-Comment
-*/
-
-/*
-Once the monetary value of consumption is determined, we can identify how households are going to allocate money between sectors, firms, and goods.
-*/
-
-
-
 
 
 
@@ -1252,7 +1444,7 @@ if(v[4]==0)//si le client n'a pas de produit : pas de rachat possible
 END_EQUATION(0);
 
 
-CYCLE(cur, "Firm")// verifie que la firme n'a pas disparu
+CYCLE(cur, "Firms")// verifie que la firme n'a pas disparu
  {
   v[20]=VS(cur,"IdFirm");
   if(v[4]==v[20])
@@ -1266,7 +1458,7 @@ CYCLE(cur, "Firm")// verifie que la firme n'a pas disparu
 
 v[12]=0;// le resultat fait 0 par defaut
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
 {
   v[6]=VS(cur,"IdFirm");
 
@@ -1430,10 +1622,10 @@ v[8] = UNIFORM(0, 1);
 // CYCLE pour chaque secteur de l'économie
 for (int sectorId = 1; sectorId <= 6; ++sectorId) {
     // CYCLE pour parcourir les firmes d'un secteur donné
-    CYCLE(cur, "Firm") {
+    CYCLE(cur, "Firms") {
         v[5] = VS(cur, "IdSector"); // Récupère le secteur de la firme
         if (v[5] == sectorId) { // Si la firme appartient au secteur en cours
-            v[6] = VS(cur, "Firm_Price"); // Récupère le prix de la firme
+            v[6] = VS(cur, "Price"); // Récupère le prix de la firme
             v[9] = VS(cur, "Firm_MS"); // Récupère la part de marché de la firme
             v[17] = VS(cur, "Firm_IsAdopted"); // Récupère si la firme a été adoptée
             v[33] = VS(cur, "Firm_Portfolio"); // Récupère le portefeuille de la firme
@@ -1451,7 +1643,7 @@ for (int sectorId = 1; sectorId <= 6; ++sectorId) {
                 }
             }
             WRITES(cur, "Utility", v[10]); // Enregistre l'utilité de la firme
-            v[27] = v[27] + v[10]; // Additionne l'utilité totale
+            v[27] += v[10]; // Additionne l'utilité totale
         }
     }
 }
@@ -1467,14 +1659,13 @@ cur = RNDDRAW("Firm", "Utility"); // Choisit une firme avec tirage aléatoire pr
 v[11] = VS(cur, "IdFirm"); // Récupère l'identifiant de la firme choisie
 WRITES(c, "Product_Type", v[11]); // Enregistre le type de produit acheté (ici, l'ID de la firme)
 
+v[6] = VS(cur, "Price"); // Récupère le prix de la firme sélectionnée
+
 // CYCLE pour augmenter les ventes en fonction de la consommation monétaire du secteur
 CYCLE(cur1, "Firm") {
     v[13] = VS(cur1, "IdFirm");
 
     if (v[13] == v[11]) { // Si la firme correspond à celle choisie
-        INCRS(cur1, "Sales", 1); // Augmente les ventes de la firme choisie d'une unité
-
-        // Selon le secteur, augmente les ventes du produit par la consommation du secteur
         if (v[5] == 1) { // Agriculture
             v[14] = VS(c, "ConsAgTot");
         } else if (v[5] == 2) { // Énergie
@@ -1491,12 +1682,16 @@ CYCLE(cur1, "Firm") {
             v[14] = 0; // Valeur par défaut, si secteur inconnu
         }
 
+        v[15] = v[14] / v[6]; // Calcul du nombre d'unités achetées
+
         // Ajout de la consommation monétaire au `Sales_Prod`
-        INCRS(cur1, "Sales_Prod", v[14]);
+        INCRS(cur1, "Sales_Prod", v[15]);
     }
 }
 
 RESULT(v[11]); // Retourne l'identifiant de la firme sélectionnée
+
+
 
 /*
 LABOUR MARKET
@@ -1505,33 +1700,7 @@ LABOUR MARKET
 
 
 
-
-
-EQUATION("Firm_BrownDemand")
-/*
-Cette équation calcule la demande d'emplois bruns pour une entreprise,
-avec un arrondi pour obtenir un nombre entier d'emplois.
-*/
-
-CYCLE(cur, "Firms") {
-    // Récupérer la production de la firme (production de biens ou services bruns)
-    v[0] = VS(cur, "ProductionBrown");  // Production de l'entreprise dans le secteur brun
-
-    // Récupérer la productivité des employés dans ce secteur
-    v[1] = VS(cur, "BrownProductivity");  // Productivité des employés dans le secteur brun
-
-    // Calcul de la demande d'emplois bruns : la production divisée par la productivité des employés
-    v[2] = v[0] / v[1];  // Demande d'emplois bruns
-
-    // Arrondi du résultat pour obtenir un entier
-    //v[2] = ROUND(v[2]);  // Arrondir à l'entier le plus proche
-
-    // Résultat : nombre d'emplois bruns demandés
-    RESULT(v[2]);
-}
-
-
-EQUATION("Firm_GreenDemand")
+EQUATION("Firm_GreenJobsNeeds")
 /*
 Cette équation calcule la demande d'emplois verts pour une entreprise,
 avec un arrondi pour obtenir un nombre entier d'emplois.
@@ -1539,10 +1708,10 @@ avec un arrondi pour obtenir un nombre entier d'emplois.
 
 CYCLE(cur, "Firms") {
     // Récupérer la production de la firme dans le secteur vert
-    v[0] = VS(cur, "ProductionGreen");  // Production de l'entreprise dans le secteur vert
+    v[0] = VS(cur, "Turnover");  // Production de l'entreprise dans le secteur vert
 
     // Récupérer la productivité des employés dans le secteur vert
-    v[1] = VS(cur, "GreenProductivity");  // Productivité des employés dans le secteur vert
+    v[1] = VS(cur, "GreenCapitalRatio");  // Productivité des employés dans le secteur vert
 
     // Calcul de la demande d'emplois verts : la production divisée par la productivité des employés
     v[2] = v[0] / v[1];  // Demande d'emplois verts
@@ -1554,6 +1723,221 @@ CYCLE(cur, "Firms") {
     RESULT(v[2]);
 }
 
+EQUATION("Firm_HighSkilledGreenJobsNeeds")
+/*
+Détermine la demande d'emplois verts hautement qualifiés 
+comme une fraction aléatoire de la demande totale d'emplois verts,
+en s'assurant que le résultat est un entier.
+*/
+
+v[0] = V("Firm_GreenJobsNeeds");  // Nombre total d'emplois verts demandés
+v[1] = RND;  // Part aléatoire pour les emplois hautement qualifiés
+
+// Calcul du nombre d'emplois hautement qualifiés (arrondi vers l'entier le plus proche)
+v[2] = floor(v[0] * v[1] + 0.5); 
+
+RESULT(v[2]);
+
+
+EQUATION("Firm_LowSkilledGreenJobsNeeds")
+/*
+Détermine la demande d'emplois verts peu qualifiés 
+comme le complément entier de la demande d'emplois hautement qualifiés.
+*/
+
+v[0] = V("Firm_GreenJobsNeeds");  // Nombre total d'emplois verts demandés
+v[1] = V("Firm_HighSkilledGreenJobsNeeds");  // Emplois hautement qualifiés déjà calculés
+
+// Correction pour éviter d'obtenir une valeur négative
+v[2] = max(0.0, v[0] - v[1]);  
+
+RESULT(v[2]);
+
+
+EQUATION("Firm_BrownJobsNeeds")
+/*
+Cette équation calcule la demande d'emplois verts pour une entreprise,
+avec un arrondi pour obtenir un nombre entier d'emplois.
+*/
+
+CYCLE(cur, "Firms") {
+    // Récupérer la production de la firme dans le secteur vert
+    v[0] = VS(cur, "Turnover");  // Production de l'entreprise dans le secteur vert
+
+    // Récupérer la productivité des employés dans le secteur vert
+    v[1] = VS(cur, "GreenCapitalRatio");  // Productivité des employés dans le secteur vert
+
+    // Calcul de la demande d'emplois verts : la production divisée par la productivité des employés
+    v[2] = v[0] / (1 - v[1]);  // Demande d'emplois verts
+
+    // Arrondi du résultat pour obtenir un entier
+    //v[2] = ROUND(v[2]);  // Arrondir à l'entier le plus proche
+
+    // Résultat : nombre d'emplois verts demandés
+    RESULT(v[2]);
+}
+
+EQUATION("Firm_HighSkilledBrownJobsNeeds")
+/*
+Détermine la demande d'emplois verts hautement qualifiés 
+comme une fraction aléatoire de la demande totale d'emplois verts,
+en s'assurant que le résultat est un entier.
+*/
+
+v[0] = V("Firm_BrownJobsNeeds");  // Nombre total d'emplois verts demandés
+v[1] = RND;  // Part aléatoire pour les emplois hautement qualifiés
+
+// Calcul du nombre d'emplois hautement qualifiés (arrondi vers l'entier le plus proche)
+v[2] = floor(v[0] * v[1] + 0.5); 
+
+RESULT(v[2]);
+
+
+EQUATION("Firm_LowSkilledBrownJobsNeeds")
+/*
+Détermine la demande d'emplois verts peu qualifiés 
+comme le complément entier de la demande d'emplois hautement qualifiés.
+*/
+
+v[0] = V("Firm_BrownJobsNeeds");  // Nombre total d'emplois verts demandés
+v[1] = V("Firm_HighSkilledBrownJobsNeeds");  // Emplois hautement qualifiés déjà calculés
+
+// Correction pour éviter d'obtenir une valeur négative
+v[2] = max(0.0, v[0] - v[1]);  
+
+RESULT(v[2]);
+
+
+EQUATION("Firm_GreenHighSkilledDemand")
+/*
+Calcule la demande nette d'emplois verts hautement qualifiés 
+comme la différence entre le besoin total et le nombre d'employés hautement qualifiés actuels dans l'entreprise.
+Un résultat négatif signifie un excédent de travailleurs, ce qui implique des licenciements.
+*/
+
+v[0] = V("Firm_HighSkilledGreenJobsNeeds");  // Besoin total en emplois verts hautement qualifiés
+
+v[1] = 0;  // Compteur des employés hautement qualifiés actuels
+
+CYCLE(cur, "Households") {
+    // Vérifie si le ménage était employé par cette firme à t-1 et est hautement qualifié
+    if (VLS(cur, "IdEmployer", 1) == V("IdEmployer") && VLS(cur, "Status", 5) == 5) {
+        v[1] += 1;  // Incrémenter le compteur
+    }
+}
+
+// La demande nette peut être positive (embauche) ou négative (licenciements)
+v[2] = v[0] - v[1];
+
+RESULT(v[2]);
+
+
+EQUATION("Firm_GreenLowSkilledDemand")
+/*
+Calcule la demande nette d'emplois verts hautement qualifiés 
+comme la différence entre le besoin total et le nombre d'employés hautement qualifiés actuels dans l'entreprise.
+Un résultat négatif signifie un excédent de travailleurs, ce qui implique des licenciements.
+*/
+
+v[0] = V("Firm_LowSkilledGreenJobsNeeds");  // Besoin total en emplois verts hautement qualifiés
+
+v[1] = 0;  // Compteur des employés hautement qualifiés actuels
+
+CYCLE(cur, "Households") {
+    // Vérifie si le ménage était employé par cette firme à t-1 et est hautement qualifié
+    if (VLS(cur, "IdEmployer", 1) == V("IdEmployer") && VLS(cur, "Status", 2) == 2) {
+        v[1] += 1;  // Incrémenter le compteur
+    }
+}
+
+// La demande nette peut être positive (embauche) ou négative (licenciements)
+v[2] = v[0] - v[1];
+
+RESULT(v[2]);
+
+EQUATION("Firm_BrownHighSkilledDemand")
+/*
+Calcule la demande nette d'emplois verts hautement qualifiés 
+comme la différence entre le besoin total et le nombre d'employés hautement qualifiés actuels dans l'entreprise.
+Un résultat négatif signifie un excédent de travailleurs, ce qui implique des licenciements.
+*/
+
+v[0] = V("Firm_HighSkilledBrownJobsNeeds");  // Besoin total en emplois verts hautement qualifiés
+
+v[1] = 0;  // Compteur des employés hautement qualifiés actuels
+
+CYCLE(cur, "Households") {
+    // Vérifie si le ménage était employé par cette firme à t-1 et est hautement qualifié
+    if (VLS(cur, "IdEmployer", 1) == V("IdEmployer") && VLS(cur, "Status", 4) == 4) {
+        v[1] += 1;  // Incrémenter le compteur
+    }
+}
+
+// La demande nette peut être positive (embauche) ou négative (licenciements)
+v[2] = v[0] - v[1];
+
+RESULT(v[2]);
+
+
+EQUATION("Firm_BrownLowSkilledDemand")
+/*
+Calcule la demande nette d'emplois verts hautement qualifiés 
+comme la différence entre le besoin total et le nombre d'employés hautement qualifiés actuels dans l'entreprise.
+Un résultat négatif signifie un excédent de travailleurs, ce qui implique des licenciements.
+*/
+
+v[0] = V("Firm_LowSkilledBrownJobsNeeds");  // Besoin total en emplois verts hautement qualifiés
+
+v[1] = 0;  // Compteur des employés hautement qualifiés actuels
+
+CYCLE(cur, "Households") {
+    // Vérifie si le ménage était employé par cette firme à t-1 et est hautement qualifié
+    if (VLS(cur, "IdEmployer", 1) == V("IdEmployer") && VLS(cur, "Status", 1) == 1) {
+        v[1] += 1;  // Incrémenter le compteur
+    }
+}
+
+// La demande nette peut être positive (embauche) ou négative (licenciements)
+v[2] = v[0] - v[1];
+
+RESULT(v[2]);
+
+
+EQUATION("TransitionActive")
+/*
+Calcul de la transition active en fonction du nombre d'agents votant pro-transition ou anti-transition.
+*/
+
+v[0] = 0;  // Compteur pour les votes pro-transition
+v[2] = VL("PeriodCounter", 1);  // Récupère la valeur du compteur de périodes de la période précédente
+
+// Si le compteur atteint 5, réinitialise et met à jour la variable TransitionActive
+if (v[2] == 5) {
+    v[2] = 0;  // Réinitialise le compteur de périodes à 0
+    // Logic to update v[1]
+    v[0] = 0;  // Réinitialiser le compteur pour les votes pro-transition
+
+    CYCLE(cur, "Households") {
+        if (V("VoteDecision") == 1) {
+            v[0] = v[0] + 1;  // Incrémente le compteur pour les votes pro-transition
+        }
+    }
+
+    // TransitionActive est 1 si plus de votes pro-transition que de votes anti-transition
+    if (v[0] > (200 - v[0])) {
+        v[1] = 1;  // v[1] = 1 si plus de votes pro-transition
+    } else {
+        v[1] = 0;  // v[1] = 0 sinon
+    }
+} else {
+    v[2] = v[2] + 1;  // Incrémente le compteur
+}
+
+// Stocke la valeur du compteur de périodes pour la période suivante
+RESULT(v[1]);  // Renvoie la valeur de TransitionActive, qui est v[1]
+
+
+USE_ZERO_INSTANCE("Firms");
 
 
 EQUATION("Status") 
@@ -1685,7 +2069,6 @@ RESULT(v[0]) // Retourne le statut d'emploi du ménage
 
 
 
-
 EQUATION("WageBill")
 /*
 Wage bill of a given firm. Depends on profits and the bargaining power of workers (related to unemployment rate).
@@ -1700,38 +2083,6 @@ v[3] = v[1] * v[2] + (1 - v[0]);  // Masse salariale en fonction des profits, de
 RESULT(v[3]);  // Retourne le résultat de la masse salariale
 
 
-
-
-EQUATION("IndividualSalary")
-/*
-Cette équation détermine les salaires individuels des employés d'une entreprise,
-de manière à ce que la somme des salaires individuels égale la masse salariale (WageBill)
-définie précédemment pour chaque firme.
-*/
-
-CYCLE(cur, "Firms") {
-    // Récupérer l'ID de la firme
-    v[0] = VLS(cur, "IDFirm", 1);  // ID de la firme
-
-    // Récupérer la masse salariale de la firme (WageBill)
-    v[1] = V("Wagebill");  // Masse salariale de la firme
-
-    // Récupérer le nombre d'employés dans la firme
-    v[2] = V("NumEmployees");  // Nombre d'employés de la firme
-
-    // Calcul du salaire de base par employé (partage équitable de la masse salariale entre les employés)
-    v[3] = v[1] / v[2];  // Salaire de base égal à la masse salariale divisée par le nombre d'employés
-
-    // Parcours des ménages pour associer les salaires à chaque employé de la firme
-    CYCLE(cur, "Households") {
-        // Vérifier que l'employé appartient à la firme actuelle
-        v[4] = VLS(cur, "IdFirm", 1);  // ID de la firme de l'employé
-        if (v[4] == v[0]) {  // Si l'employé appartient à cette firme
-            // Mise à jour du salaire de l'employé
-            RESULT(v[3]);  // Résultat pour l'employé : salaire de base de la firme
-        }
-    }
-}
 
 
 EQUATION("BaseWage")
@@ -1771,8 +2122,6 @@ RESULT(v[2])  // Applique la prime verte
 
 
 
-
-
 EQUATION("HighSkilledBrownWage")
 /*
 Salaire des travailleurs qualifiés dans une firme brune.
@@ -1783,7 +2132,6 @@ v[1] = V("SkillPremium");  // Prime pour les emplois qualifiés
 v[2] = v[0] * (1 + v[1]);
 
 RESULT( v[2])  // Applique la prime de qualification
-
 
 
 
@@ -1798,6 +2146,16 @@ v[2] = V("GreenPremium");
 v[3] = v[0] * (1 + v[1] + v[2]);
  
 RESULT( v[3])  // Applique les deux primes (qualification + vert)
+EQUATION("HighSkilledGreenWage")
+/*
+Salaire des travailleurs qualifiés dans une firme verte.
+*/
+v[0] = V("BaseWage");  
+v[1] = V("GreenSkillPremium");  
+
+v[2] = v[0] * (1 + v[1]);
+ 
+RESULT( v[2])  // Applique les deux primes (qualification + vert)
 
 
 
@@ -1810,7 +2168,7 @@ RESULT( v[3])  // Applique les deux primes (qualification + vert)
 
 EQUATION("DepositInterestRate")
 /*
-Taux d'intérêt sur les dépôts selon les hypothèses post-keynésiennes:
+Taux d'intérêt sur les dépôts :
 - Taux directeur de la banque centrale,
 - Part de marché de la banque,
 - Risque de crédit (exposition aux défauts),
@@ -1820,12 +2178,11 @@ Taux d'intérêt sur les dépôts selon les hypothèses post-keynésiennes:
 
 v[0] = V("CentralBankRate");           // Taux directeur de la banque centrale (i_CB)
 v[1] = V("MarketShareBank");           // Part de marché de la banque
-v[2] = V("CreditConstraintVar");                // Risque de crédit (variable entre 0 et 1)
 v[3] = V("ReserveRequirement");        // Taux de réserve obligatoire (variable entre 0 et 1)
 v[4] = V("LiquidityPreference");       // Préférence pour la liquidité (variable entre 0 et 1)
 v[5] = V("BaseMarkup");                // Mark-up de base (ajusté par le risque de crédit et la part de marché)
 
-v[6] = v[0] + (v[1] * v[5]) - (v[2] * 0.1) - (v[3] * 0.2) + (v[4] * 0.15);  // Calcul du taux d'intérêt sur les dépôts
+v[6] = v[0] + (v[1] * v[5]) - (v[3] * 0.2) + (v[4] * 0.15);  // Calcul du taux d'intérêt sur les dépôts
 
 RESULT(v[6])
 
@@ -1851,6 +2208,27 @@ v[5] = v[0] + v[4] + v[2] * v[3];   // Final loan interest rate
 RESULT(v[5])
 
 
+EQUATION("MarketInterestRate")
+/*
+Cette équation calcule la moyenne des taux d'intérêts des prêts (LoanInterestRate)
+à travers toutes les entreprises (Firms) et renvoie le résultat comme MarketInterestRate.
+*/
+
+v[0] = 0.0;  // Initialisation de la somme des taux d'intérêt
+v[2] = V("TotalNumberFirms");
+
+// Cumul des taux d'intérêt pour chaque firme
+CYCLE(cur, "Firms") {
+    v[0] = v[0] + VS(cur, "LoanInterestRate");  // Somme des taux d'intérêts des prêts
+}
+
+// Calcul de la moyenne des taux d'intérêts
+v[1] = v[0] / v[2];  // Nombre total de firmes CHANGER SI BESOIN
+
+RESULT(v[1]);  // Renvoie la moyenne
+
+
+
 EQUATION("GreenLoanInterestRate")
 /*
 Calcul du taux d'intérêt sur les prêts verts :
@@ -1862,7 +2240,7 @@ Calcul du taux d'intérêt sur les prêts verts :
 
 v[0] = V("CentralBankRate");           // Taux directeur de la banque centrale (i_CB)
 v[1] = V("MarketShareBank");           // Part de marché de la banque
-v[2] = V("CreditConstraintVar");          // Contrainte de crédit (valeur entre 0 et 1)
+v[2] = V("CreditConstraintInt");          // Contrainte de crédit (valeur entre 0 et 1)
 v[3] = V("BaseMarkup");                // Mark-up de base pour l'impact de la part de marché
 v[4] = v[3] * v[1];                   // Mark-up proportionnel à la part de marché
 v[5] = V("GreenLoanFactor");           // Facteur spécifique aux prêts verts (réduction du taux)
@@ -1890,9 +2268,9 @@ EQUATION("BankLoans")
 Total quantity of loans granted by the bank
 */
 
-v[0] = V("LoanCons");
-v[1] = V("GreenLoans");
-v[2] = V("BrownLoans");
+v[0] = V("TotalHouseholdDebtBank");
+v[1] = V("GreenLoansBank");
+v[2] = V("BrownLoansBank");
 
 v[3] = v[0] + v[1] + v[2];
 
@@ -1923,50 +2301,300 @@ Total quantity of loans granted by the bank
 RESULT(v[2])
 
 
-EQUATION("GreenLoans")
+EQUATION("TotalNumberFirms")
 /*
-Comment
+Total number of firms in the economy
 */
 
-v[0] = VL("GreenLoans", 1);
-v[1] = V("GreenLoansVar");
+v[0] = V("NumberAgriculturalFirms");
+v[1] = V("NumberEnergyFirms");
+v[2] = V("NumberHousingFirms");
+v[3] = V("NumberTransportationFirms");
+v[4] = V("NumberIndustrialFirms");
+v[5] = V("NumberTCFirms");
 
-v[2] = v[0] + v[1];
+v[6] = v[0] + v[1] + v[2] + v[3] + v[4] + v[5];
 
-RESULT( v[2])
+RESULT( v[6])
+
+
+
+
+EQUATION("NumberAgriculturalFirms")
+/*
+Compte le nombre d'entreprises par secteur.
+*/
+
+v[0] = 0; // Initialisation du compteur
+CYCLE(cur, "Firms") {
+    if (VS(cur, "IdSector") == 1) { // Modifier ici pour d'autres secteurs si nécessaire
+        v[0] += 1;
+    }
+}
+
+RESULT(v[0]);
+
+
+EQUATION("NumberEnergyFirms")
+/*
+Compte le nombre d'entreprises par secteur.
+*/
+
+v[0] = 0; // Initialisation du compteur
+CYCLE(cur, "Firms") {
+    if (VS(cur, "IdSector") == 2) { // Modifier ici pour d'autres secteurs si nécessaire
+        v[0] += 1;
+    }
+}
+
+RESULT(v[0]);
+
+
+EQUATION("NumberHousingFirms")
+/*
+Compte le nombre d'entreprises par secteur.
+*/
+
+v[0] = 0; // Initialisation du compteur
+CYCLE(cur, "Firms") {
+    if (VS(cur, "IdSector") == 3) { // Modifier ici pour d'autres secteurs si nécessaire
+        v[0] += 1;
+    }
+}
+
+RESULT(v[0]);
+
+
+
+EQUATION("NumberTransportationFirms")
+/*
+Compte le nombre d'entreprises par secteur.
+*/
+
+v[0] = 0; // Initialisation du compteur
+CYCLE(cur, "Firms") {
+    if (VS(cur, "IdSector") == 4) { // Modifier ici pour d'autres secteurs si nécessaire
+        v[0] += 1;
+    }
+}
+
+RESULT(v[0]);
+
+
+EQUATION("NumberIndustrialFirms")
+/*
+Compte le nombre d'entreprises par secteur.
+*/
+
+v[0] = 0; // Initialisation du compteur
+CYCLE(cur, "Firms") {
+    if (VS(cur, "IdSector") == 5) { // Modifier ici pour d'autres secteurs si nécessaire
+        v[0] += 1;
+    }
+}
+
+RESULT(v[0]);
+
+
+EQUATION("NumberTCFirms")
+/*
+Compte le nombre d'entreprises par secteur.
+*/
+
+v[0] = 0; // Initialisation du compteur
+CYCLE(cur, "Firms") {
+    if (VS(cur, "IdSector") == 6) { // Modifier ici pour d'autres secteurs si nécessaire
+        v[0] += 1;
+    }
+}
+
+RESULT(v[0]);
+
+
+
+EQUATION("GreenLoans")
+/*
+Initialisation des prêts verts en fonction du secteur.
+*/
+
+v[0] = VL("GreenLoans", 1); // Valeur de la période précédente
+v[1] = V("GreenLoansVar"); // Variation des prêts verts
+
+// Initialisation uniquement à la première période
+if (t == 1) {
+    v[2] = 0;
+    if (V("IdSector") == 1) {
+        v[3] = V("NumberAgriculturalFirms");
+        if (v[3] > 0) v[2] = 22.8 / v[3];
+    } else if (V("IdSector") == 2) {
+        v[3] = V("NumberEnergyFirms");
+        if (v[3] > 0) v[2] = 99.5 / v[3];
+    } else if (V("IdSector") == 3) {
+        v[3] = V("NumberHousingFirms");
+        if (v[3] > 0) v[2] = 89.7 / v[3];
+    } else if (V("IdSector") == 4) {
+        v[3] = V("NumberTransportationFirms");
+        if (v[3] > 0) v[2] = 50.5 / v[3];
+    } else if (V("IdSector") == 5) {
+        v[3] = V("NumberIndustrialFirms");
+        if (v[3] > 0) v[2] = 6 / v[3];
+    } else if (V("IdSector") == 6) {
+        v[3] = V("NumberTCFirms");
+        if (v[3] > 0) v[2] = 1.9 / v[3];
+    }
+} else {
+    v[2] = v[0] + v[1];
+}
+
+RESULT(v[2]);
 
 
 EQUATION("BrownLoans")
 /*
-Comment
+Initialisation des prêts bruns en fonction du secteur.
 */
 
-v[0] = VL("BrownLoans", 1);
-v[1] = V("BrownLoansVar");
+v[0] = VL("BrownLoans", 1); // Valeur de la période précédente
+v[1] = V("BrownLoansVar"); // Variation des prêts bruns
 
-v[2] = v[0] + v[1];
+// Initialisation uniquement à la première période
+if (t == 1) {
+    v[2] = 0;
+    if (V("IdSector") == 1) {  // Agriculture
+        v[3] = V("NumberAgriculturalFirms");
+        if (v[3] > 0) v[2] = 168.2 / v[3];
+    } else if (V("IdSector") == 2) {  // Énergie
+        v[3] = V("NumberEnergyFirms");
+        if (v[3] > 0) v[2] = 165.5 / v[3];
+    } else if (V("IdSector") == 3) {  // Logement
+        v[3] = V("NumberHousingFirms");
+        if (v[3] > 0) v[2] = 237.3 / v[3];
+    } else if (V("IdSector") == 4) {  // Transport
+        v[3] = V("NumberTransportationFirms");
+        if (v[3] > 0) v[2] = 249.5 / v[3];
+    } else if (V("IdSector") == 5) {  // Industrie
+        v[3] = V("NumberIndustrialFirms");
+        if (v[3] > 0) v[2] = 682 / v[3];
+    } else if (V("IdSector") == 6) {  // Technologie & Communication
+        v[3] = V("NumberTCFirms");
+        if (v[3] > 0) v[2] = 117.1 / v[3];
+    }
+} else {
+    v[2] = v[0] + v[1];
+}
 
-RESULT( v[2])
+RESULT(v[2]);
 
 
-EQUATION("GreenLoansSec")
+
+EQUATION("GreenLoansBank")
 /*
-Comment
+Calcul de la somme des dettes vertes des firmes envers une banque donnée.
+La somme des dettes vertes (GreenLoans) est calculée pour toutes les firmes dont la banque actuelle (CurrentBank)
+est égale à l'IdBank de la banque actuelle.
 */
 
-v[0] = SUM("GreenLoans");
+v[0] = V("IdBank");      // Identifiant de la banque actuelle
+v[1] = 0;                      // Initialiser la somme des dettes vertes pour cette banque
 
-RESULT( v[0])
+// Parcourir toutes les firmes
+CYCLE(cur, "Firms") {
+    v[2] = VS(cur, "CurrentBank");   // Banque actuelle de la firme
+    v[3] = VS(cur, "GreenLoans");    // Dettes vertes de la firme
+
+    // Si la banque de la firme est égale à la banque actuelle
+    if (v[2] == v[0]) {
+        v[1] = v[1] + v[3];         // Ajouter les dettes vertes de la firme à la somme
+    }
+}
+
+// Résultat : la somme des dettes vertes pour la banque donnée
+RESULT(v[1]);
 
 
-EQUATION("BrownLoansSec")
+EQUATION("BrownLoansBank")
 /*
-Comment
+Calcul de la somme des dettes brunes des firmes envers une banque donnée.
+La somme des dettes brunes (BrownLoans) est calculée pour toutes les firmes dont la banque actuelle (CurrentBank)
+est égale à l'IdBank de la banque actuelle.
 */
 
-v[0] = SUM("BrownLoans");
+v[0] = V("IdBank");      // Identifiant de la banque actuelle
+v[1] = 0;                      // Initialiser la somme des dettes brunes pour cette banque
 
-RESULT( v[0])
+// Parcourir toutes les firmes
+CYCLE(cur, "Firms") {
+    v[2] = VS(cur, "CurrentBank");   // Banque actuelle de la firme
+    v[3] = VS(cur, "BrownLoans");    // Dettes brunes de la firme
+
+    // Si la banque de la firme est égale à la banque actuelle
+    if (v[2] == v[0]) {
+        v[1] = v[1] + v[3];         // Ajouter les dettes brunes de la firme à la somme
+    }
+}
+
+// Résultat : la somme des dettes brunes pour la banque donnée
+RESULT(v[1]);
+
+
+EQUATION("TotalHouseholdDebtBank")
+/*
+Calcul de la somme des dettes totales des ménages envers une banque donnée.
+La somme des dettes totales (HouseholdTotalDebt) est calculée pour tous les ménages dont la banque actuelle (CurrentBankHousehold)
+est égale à l'IdBank de la banque actuelle.
+*/
+
+v[0] = V("IdBank");           // Identifiant de la banque actuelle
+v[1] = 0;                           // Initialiser la somme des dettes totales pour cette banque
+
+// Parcourir tous les ménages
+CYCLE(cur, "Households") {
+    v[2] = VS(cur, "CurrentBankHousehold");   // Banque actuelle du ménage
+    v[3] = VS(cur, "HouseholdTotalDebt");     // Dette totale du ménage
+
+    // Si la banque actuelle du ménage est égale à l'IdBank de la banque actuelle
+    if (v[2] == v[0]) {
+        v[1] = v[1] + v[3];         // Ajouter la dette totale du ménage à la somme
+    }
+}
+
+// Résultat : la somme des dettes totales pour la banque donnée
+RESULT(v[1]);
+
+
+
+EQUATION("BanksAnimalSpirits")
+/*
+Détermine si la banque est pessimiste (1) ou optimiste (0) en fonction du gap de faillites entre t et t-1,
+ajusté par l'appétence au risque de la banque. Plus l'appétence au risque est élevée, plus le gap influence
+la probabilité de pessimisme.
+*/
+
+v[0] = V("Failures");     // Nombre de faillites actuelles
+v[1] = VL("Failures", 1); // Nombre de faillites à la période précédente
+
+v[2] = v[0] - v[1];  // Calcul du gap des faillites
+
+// Paramètre représentant l'appétence au risque de la banque, compris entre 0 et 1
+v[3] = V("RiskAppetite");  // Appétence au risque de la banque (doit être entre 0 et 1)
+
+// Ajustement du gap des faillites par l'appétence au risque
+v[4] = v[2] * v[3];  // Gap ajusté en fonction de l'appétence au risque
+
+// Transformation en probabilité bornée strictement entre 0 et 1
+v[5] = 1 / (1 + exp(-v[4]));  // Fonction logistique (sigmoïde)
+
+// Tirage aléatoire entre 0 et 1
+v[6] = RND;
+
+// Comparaison entre la probabilité et le tirage aléatoire
+if (v[6] < v[5])
+    v[7] = 1;  // La banque devient pessimiste
+else
+    v[7] = 0;  // La banque reste optimiste
+
+RESULT(v[7]);
+
 
 
 
@@ -1977,14 +2605,13 @@ Calculation of credit constraint based on the difference between firm's leverage
 The result is normalized to fall between 0 and 1.
 */
 
+v[4] = V("BanksAnimalSpirits");
 v[0] = V("LeverageFirm");         // Current leverage of the firm
 v[1] = V("TargetLeverage");       // Target leverage set by banks
-v[2] = V("MaxLeverageDifference"); // Maximum allowed difference between leverages (for normalization)
 
 v[3] = v[0] - v[1];               // Difference between observed and target leverage
-v[4] = (v[3] / v[2] < 0) ? 0 : (v[3] / v[2] > 1) ? 1 : v[3] / v[2];  // Normalize difference to the range [0, 1]
 
-RESULT(v[4])
+RESULT(v[3])
 
 
 
@@ -1994,35 +2621,82 @@ Calculation of credit constraint based on the difference between firm's leverage
 The result is normalized to fall between 0 and 1.
 */
 
+v[4] = V("BanksAnimalSpirits");
 v[0] = V("LeverageFirm");         // Current leverage of the firm
 v[1] = V("TargetLeverage");       // Target leverage set by banks
-v[2] = V("MaxLeverageDifference"); // Maximum allowed difference between leverages (for normalization)
 
 v[3] = v[0] - v[1];               // Difference between observed and target leverage
-v[4] = (v[3] / v[2] < 0) ? 0 : (v[3] / v[2] > 1) ? 1 : v[3] / v[2];  // Normalize difference to the range [0, 1]
 
-RESULT(v[4])
-
+RESULT(v[3])
 
 
-EQUATION("FirmBankSelection")
+EQUATION("CreditConstraintIntHouseholds")
+/*
+Calculation of credit constraint based on the difference between firm's leverage and target leverage.
+The result is normalized to fall between 0 and 1.
+*/
+
+v[4] = V("BanksAnimalSpirits");
+v[0] = V("LeverageHousehold");         // Current leverage of the firm
+v[1] = V("TargetLeverage");       // Target leverage set by banks
+
+v[3] = v[0] - v[1];               // Difference between observed and target leverage
+
+RESULT(v[3])
+
+
+EQUATION("LeverageHousehold")
+/*
+Comment
+*/
+
+v[0] = V("HouseholdTotalDebt");
+v[1] = V("Savings");
+
+v[2] = v[0] / v[1];
+
+RESULT( v[2])
+
+
+
+EQUATION("LoanRateCons")
+/*
+Calculate the loan interest rate based on:
+- Central bank interest rate,
+- A mark-up depending on the bank's market share,
+- A factor reflecting the credit constraint.
+*/
+
+v[0] = V("CentralBankRate");        // Central bank interest rate (i_BC)
+v[1] = V("MarketShareBank");        // Bank's market share (as a fraction between 0 and 1)
+v[2] = V("CreditConstraintIntHouseholds");       // Credit constraint (value between 0 and 1)
+v[3] = V("BaseMarkup");             // Base mark-up for market share impact (e.g., 0.02), représente l'effet maximum de la part de marché et de la contrainte sur le taux
+
+v[4] = v[3] * v[1];                 // Mark-up proportional to market share
+v[5] = v[0] + v[4] + v[2] * v[3];   // Final loan interest rate
+
+RESULT(v[5])
+
+
+
+EQUATION("CurrentBank")
 /*
 Processus de sélection des banques par la firme basé sur le taux d'intérêt :
 1. La firme garde la même banque si le taux d'intérêt est inférieur au taux moyen du marché.
 2. Si la firme n'est pas satisfaite, elle choisit une nouvelle banque avec un taux d'intérêt inférieur au taux moyen du marché.
 */
 
-v[0] = VLS(cur, "IdFirm", 1);                   // Identifiant de la firme (cur)
-v[1] = VLS(cur, "PreviousBank", 1);             // Banque utilisée précédemment
-v[2] = VLS(cur, "InterestRatePreviousBank", 1); // Taux d'intérêt de la banque précédente
-v[3] = VLS(cur, "MarketInterestRate", 1);       // Taux d'intérêt moyen du marché
-v[4] = -1;                                     // Variable pour stocker la banque choisie
-v[5] = 0;                                      // Compteur pour itérer sur les banques disponibles
+v[0] = VLS(cur, "IdFirm", 1);                    // Identifiant de la firme (cur)
+v[1] = VLS(cur, "CurrentBank", 1);                // Banque utilisée précédemment (CurrentBank)
+v[2] = VLS(cur, "InterestRatePreviousBank", 1);  // Taux d'intérêt de la banque précédente
+v[3] = VLS(cur, "MarketInterestRate", 1);        // Taux d'intérêt moyen du marché
+v[4] = -1;                                       // Variable pour stocker la banque choisie
+v[5] = 0;                                        // Compteur pour itérer sur les banques disponibles
 
 // Boucle pour itérer sur les banques disponibles
 CYCLE(cur, "Banks") {
-    v[6] = VLS(cur, "IdBank", 1);               // Identifier la banque
-    v[7] = VLS(cur, "LoanInterestRate", 1);      // Taux d'intérêt de la banque en cours
+    v[6] = VS(cur, "IdBank");                // Identifier la banque
+    v[7] = VS(cur, "LoanInterestRate");      // Taux d'intérêt de la banque en cours
 
     // Si le taux d'intérêt est inférieur au taux moyen du marché
     if (v[7] < v[3]) {
@@ -2031,23 +2705,23 @@ CYCLE(cur, "Banks") {
             v[4] = v[6];  // Choisir cette banque
         }
     }
-    v[5] = v[5] + 1;                            // Incrémenter le compteur de banques
+    v[5] = v[5] + 1;                             // Incrémenter le compteur de banques
 }
 
 // Si aucune banque n'a été trouvée avec un taux inférieur au taux moyen
 if (v[4] == -1) {
-    v[4] = v[1];                               // Garder la banque initiale si aucune meilleure n'est trouvée
+    v[4] = v[1];  // Garder la banque initiale si aucune meilleure n'est trouvée
 }
 
-// Mise à jour de l'IdBank de la firme en utilisant WRITES
-WRITES(cur, "IdBank", v[4]);  // Mettre à jour la banque choisie
+// Mise à jour de l'CurrentBank de la firme en utilisant WRITES
+WRITES(cur, "CurrentBank", v[4]);  // Mettre à jour la banque choisie
 
 RESULT(v[4])  // Retourner la banque choisie
 
 
 
 
-EQUATION("HouseholdBankDecision")
+EQUATION("CurrentBankHouseholds")
 /*
 Processus de décision du ménage pour choisir une banque :
 1. Le ménage évalue les banques disponibles et sélectionne celle qui offre un meilleur taux d'intérêt sur les dépôts
@@ -2055,29 +2729,27 @@ Processus de décision du ménage pour choisir une banque :
 2. Si aucune banque ne répond à ces critères, le ménage conserve sa banque actuelle.
 */
 
-v[0] = VS(cur, "IdBank");                // Banque actuelle du ménage
-v[1] = VS(cur, "DepositInterestRate");   // Taux d'intérêt actuel sur les dépôts du ménage
-v[2] = VS(cur, "GreenAssetRatio");       // Ratio d'actifs verts de la banque actuelle
-v[3] = v[0];                             // Initialiser avec la banque actuelle
-
-//    object *bank;                            // Déclarer un pointeur pour itérer sur les banques
+v[0] = VS(cur, "CurrentBankHouseholds");   // Banque actuelle du ménage (Initiale)
+v[1] = VS(cur, "DepositInterestRate");    // Taux d'intérêt actuel sur les dépôts du ménage
+v[2] = VS(cur, "GreenAssetRatio");        // Ratio d'actifs verts de la banque actuelle
+v[3] = v[0];                              // Initialisation avec la banque actuelle
 
 // Parcourir les banques disponibles
 CYCLE(cur, "Banks") {
-    v[5] = VS(cur, "IdBank");                // Identifiant de la banque en cours
-    v[6] = VS(cur, "DepositInterestRate");   // Taux d'intérêt de la banque en cours
-    v[7] = VS(cur, "GreenAssetRatio");       // Ratio d'actifs verts de la banque en cours
+    v[5] = VS(cur, "IdBank");             // Identifiant de la banque en cours
+    v[6] = VS(cur, "DepositInterestRate"); // Taux d'intérêt de la banque en cours
+    v[7] = VS(cur, "GreenAssetRatio");     // Ratio d'actifs verts de la banque en cours
 
     // Vérifier si la banque actuelle est meilleure
-    if (v[6] > v[1] && v[7] > v[2]) {         // Conditions pour changer de banque
-        v[3] = v[5];                          // Sélectionner cette banque
-        v[1] = v[6];                          // Mettre à jour les critères de comparaison
-        v[2] = v[7];                          // Mettre à jour les critères de comparaison
+    if (v[6] > v[1] && v[7] > v[2]) {        // Conditions pour changer de banque
+        v[3] = v[5];                         // Sélectionner cette banque
+        v[1] = v[6];                         // Mettre à jour les critères de comparaison
+        v[2] = v[7];                         // Mettre à jour les critères de comparaison
     }
 }
 
-// Mettre à jour la banque du ménage si elle a changé
-WRITES(cur, "IdBank", v[3]);  // Mise à jour de la banque choisie pour le ménage
+// Mise à jour de la banque du ménage si elle a changé ou si aucune nouvelle banque n'a été choisie
+WRITES(cur, "CurrentBankHouseholds", v[3]);  // Mise à jour de la banque choisie pour le ménage
 
 RESULT(v[3])  // Retourner l'identifiant de la banque choisie
 
@@ -2090,100 +2762,68 @@ Green Asset Ratio
 */
 
 
-v[0] = V("GreenLoans");              // Total loans granted by the current bank
-v[1] = V("BankLoans");            // Total loans granted by all banks
+v[0] = V("GreenLoansBank");              // Total loans granted by the current bank
+v[1] = V("BrownLoansBank");            // Total loans granted by all banks
 
-v[2] = v[0] / v[1];
+v[2] = v[0] / (v[1] + v[2]);
 
 RESULT(v[2])
 
 
-
-
-
-EQUATION("BankProfit")
+EQUATION("SavingsBank")
 /*
-Calcul du profit de la banque en fonction des intérêts perçus sur les prêts verts, les prêts bruns,
-et des intérêts payés sur les dépôts.
+Savings held at the bank.
 */
 
-v[0] = V("GreenLoanInterestRate");   // Taux d'intérêt des prêts verts
-v[1] = V("LoanInterestRate");   // Taux d'intérêt des prêts bruns
-v[2] = V("GreenLoans"); // Montant total des prêts verts
-v[3] = V("BrownLoans"); // Montant total des prêts bruns
-v[4] = V("Savings");   // Montant total des dépôts
-v[5] = V("DepositInterestRate");     // Taux d'intérêt payé sur les dépôts
-v[6] = V("LoanRateCons");
-v[7] = V("LoanCons");
+v[0] = VS(cur, "IdBank");           // Identifiant de la banque actuelle
+v[1] = 0;                           // Initialiser la somme des dettes totales pour cette banque
 
-// Calcul des intérêts perçus sur les prêts verts et bruns, moins les intérêts payés sur les dépôts
-v[6] = (v[0] * v[2]) + (v[1] * v[3]) + (v[6] * v[7]) - (v[5] * v[4]); // Profit net de la banque
+// Parcourir tous les ménages
+CYCLE(cur, "Households") {
+    v[2] = VS(cur, "CurrentBankHousehold");   // Banque actuelle du ménage
+    v[3] = VS(cur, "Savings");     // Dette totale du ménage
 
-RESULT(v[6]);  // Retourner le profit net de la banque
+    // Si la banque actuelle du ménage est égale à l'IdBank de la banque actuelle
+    if (v[2] == v[0]) {
+        v[1] = v[1] + v[3];         // Ajouter la dette totale du ménage à la somme
+    }
+}
+
+RESULT( v[1])
 
 
 
-EQUATION("ConsumerCreditRisk")
+EQUATION("BankProfits")
 /*
-Modélisation normalisée du risque financier d'un ménage emprunteur dans le cadre d'un crédit à la consommation.
-1. Calcul de la mensualité basée sur le montant emprunté, le taux d'intérêt et la durée du crédit.
-2. Calcul du taux d'endettement.
-3. Calcul de l'indicateur de solvabilité.
-4. Calcul de la probabilité de défaut en fonction du taux d'endettement.
-5. Normalisation du risque financier total pour la banque pour le ramener à un intervalle [0, 1].
+Calcule les profits réalisés par une banque sur ses activités de prêt :
+1. Parcours les entreprises et récupère celles dont CurrentBank == IdBank.
+2. Ajoute les profits des GreenLoans et BrownLoans (stock de la période précédente * taux de la période actuelle).
+3. Parcours les ménages et récupère ceux dont CurrentBankHousehold == IdBank.
+4. Ajoute les profits des prêts à la consommation (HouseholdTotalDebt * LoanRateCons).
+5. Retranche les intérêts versés sur les dépôts (Savings de la période précédente * DepositInterestRate).
 */
 
-v[0] = V("LoanCons");            // Montant du crédit à la consommation (C)
-v[1] = V("InterestRate");          // Taux d'intérêt du crédit (r)
-v[2] = V("CreditDuration");        // Durée du crédit en mois (T)
-v[3] = V("Ydisp");                // Revenu du ménage (Y)
-v[4] = V("TotalDebt");             // Dette totale du ménage (D)
+v[0] = V("IdBank");  // Identifiant de la banque
+v[1] = 0;  // Initialisation des profits sur prêts aux entreprises
+v[2] = 0;  // Initialisation des profits sur prêts aux ménages
 
-// Calcul de la mensualité du crédit à la consommation
-v[5] = v[0] * v[1] / (1 - pow(1 + v[1], -v[2]));  // Formule d'amortissement du crédit
+// Boucle sur les firmes pour calculer les profits sur GreenLoans et BrownLoans
+CYCLE(cur, "Firms") {
+    if (VS(cur, "CurrentBank") == v[0]) {
+        v[1] += VLS(cur, "GreenLoans", 1) * VS(cur, "GreenLoansInt") + 
+                VLS(cur, "BrownLoans", 1) * VS(cur, "BrownLoansInt");
+    }
+}
 
-// Calcul du taux d'endettement (E)
-v[6] = v[4] / v[3];               // Taux d'endettement : D / Y
+// Boucle sur les ménages pour les profits des prêts à la consommation et les intérêts versés
+CYCLE(cur, "Households") {
+    if (VS(cur, "CurrentBankHousehold") == v[0]) {
+        v[2] += VLS(cur, "HouseholdTotalDebt", 1) * VS(cur, "LoanRateCons");
+        v[2] -= VLS(cur, "Savings", 1) * VS(cur, "DepositInterestRate");
+    }
+}
 
-// Calcul de l'indicateur de solvabilité (I)
-v[7] = v[3] - v[4];               // Solvabilité : Y - D
-
-// Calcul de la probabilité de défaut (p_d) basée sur le taux d'endettement
-v[8] = v[6] / (1 + v[6]);         // Probabilité de défaut : E / (1 + E)
-
-// Normalisation du risque financier total
-v[9] = v[8] * v[5];               // Risque financier total : p_d * M
-
-// Normalisation pour obtenir un résultat compris entre 0 et 1
-v[10] = v[9] / (V("MaxRiskValue"));  // Diviser par une valeur maximale théorique de risque
-
-RESULT(v[10])                      // Retourner le risque financier normalisé
-
-
-
-EQUATION("MaxRiskValue")
-/*
-Calcul du risque financier maximal pour un ménage emprunteur dans le cadre d'un crédit à la consommation.
-La valeur de risque est fonction de la mensualité maximale et de la probabilité de défaut maximale.
-*/
-
-v[11] = V("MaxLoanAmount");            // Montant maximal du crédit à la consommation (C_max)
-v[12] = V("MaxInterestRate");          // Taux d'intérêt maximal (r_max)
-v[13] = V("MinCreditDuration");        // Durée minimale du crédit (T_min) (en mois)
-
-v[14] = v[11] * v[12] / (1 - pow(1 + v[12], -v[13]));  // Calcul de la mensualité maximale (M_max)
-
-// Maximum du taux d'endettement (E_max), supposé être 1 dans le pire scénario
-v[15] = 1;  // Taux d'endettement maximal (E_max) = 1 (100%)
-
-// Maximum de la probabilité de défaut (p_d_max), supposée être 1 pour un ménage avec un taux d'endettement maximal
-v[16] = v[15] / (1 + v[15]);         // Probabilité de défaut maximale (p_d_max)
-
-// Calcul du risque financier maximal (MaxRiskValue)
-v[17] = v[16] * v[14];               // Risque financier maximal : p_d_max * M_max
-
-RESULT(v[17])                         // Retourner la valeur maximale du risque
-
+RESULT(v[1] + v[2])  // Profits totaux de la banque sur ses prêts
 
 
 EQUATION("ConsumerLoanBankSelection")
@@ -2209,7 +2849,6 @@ RESULT(v[2])                      // Retourner la banque choisie pour le crédit
 
 
 /*EQUATIONS RELATIVES A LA NATURE*/
-
 
 
 // Déclaration des équations
@@ -2524,6 +3163,67 @@ EQUATION("rho_V")
 
 
 /*EQUATIONS RELATIVES A L'ACCUMULATION DU CAPITAL*/
+/*EQUATIONS RELATIVES A L'ACCUMULATION DU CAPITAL*/
+/*EQUATIONS RELATIVES A L'ACCUMULATION DU CAPITAL*/
+/*EQUATIONS RELATIVES A L'ACCUMULATION DU CAPITAL*/
+/*EQUATIONS RELATIVES A L'ACCUMULATION DU CAPITAL*/
+/*EQUATIONS RELATIVES A L'ACCUMULATION DU CAPITAL*/
+/*EQUATIONS RELATIVES A L'ACCUMULATION DU CAPITAL*/
+/*EQUATIONS RELATIVES A L'ACCUMULATION DU CAPITAL*/
+/*EQUATIONS RELATIVES A L'ACCUMULATION DU CAPITAL*/
+
+
+EQUATION("TotalDebt")
+/*
+Total debt of the firm.
+*/
+
+v[0] = V("GreenLoans");
+v[1] = V("BrownLoans");
+
+v[2] = v[0] + v[1];
+
+RESULT( v[2])
+
+
+EQUATION("SelectedChampions")
+/*
+Attribue 1 à 10% des entreprises de chaque secteur (IdSector) et 0 aux autres.
+Une fois sélectionnées, elles restent champions pour toute la durée du modèle.
+*/
+
+if (T == 1) {  // Exécution uniquement à la première période
+    // Réinitialiser les sélections de champions à 0
+    CYCLE(cur, "Firms") {
+        WRITES(cur, "SelectedChampions", 0);
+    }
+
+    // Sélectionner 10% des entreprises de chaque secteur
+    for (v[0] = 1; v[0] <= 6; v[0]++) {  // Boucle sur chaque secteur (IdSector de 1 à 6)
+        // Compte le nombre total d'entreprises dans le secteur courant
+        v[1] = 0;
+        CYCLE(cur, "Firms") {
+            if (VS(cur, "IdSector") == v[0]) {
+                v[1]++;
+            }
+        }
+
+        // Tirage aléatoire pour 10% des firmes dans ce secteur
+        v[2] = max(1, round(0.1 * v[1]));  // On choisit 10% des firmes, au minimum 1 entreprise
+        v[3] = 0;
+        CYCLE(cur, "Firms") {
+            if (VS(cur, "IdSector") == v[0] && v[3] < v[2]) {
+                if (RND < 0.1) {  // Sélectionne 10% aléatoirement
+                    WRITES(cur, "SelectedChampions", 1);  // Marque la firme comme championne
+                    v[3]++;
+                }
+            }
+        }
+    }
+}
+
+RESULT(V("SelectedChampions"))
+
 
 
 EQUATION("TotalInvestment")
@@ -2545,7 +3245,7 @@ EQUATION("TotalBrownInvestment")
 Calcule l'investissement brun total en sommant les investissements bruns de toutes les firmes.
 */
 
-v[0] = SUM("Brown Investment");  // Somme des investissements bruns des firmes
+v[0] = SUM("BrownInvestment");  // Somme des investissements bruns des firmes
 
 RESULT(v[0])
 
@@ -2557,20 +3257,20 @@ EQUATION("TotalGreenInvestment")
 Calcule l'investissement vert total en sommant les investissements verts de toutes les firmes.
 */
 
-v[0] = SUM("Green Investment");  // Somme des investissements verts des firmes
+v[0] = SUM("GreenInvestment");  // Somme des investissements verts des firmes
 
 RESULT(v[0])
 
 
 
 
-EQUATION("Total Capital")
+EQUATION("TotalCapital")
 /*
 Evolution of Total Capital
 */
 
-v[0] = V("Brown Capital");
-v[1] = V("Green Capital");
+v[0] = V("BrownCapital");
+v[1] = V("GreenCapital");
 
 v[2] = v[0] + v[1];
 
@@ -2578,53 +3278,150 @@ RESULT( v[2])
 
 
 
-EQUATION("Brown Capital")
+EQUATION("GreenCapitalRatio")
+/*
+Green Capital ratio of the firm.
+*/
+
+v[0] = V("GreenCapital");
+v[1] = V("BrownCapital");
+
+v[2] = v[0] / v[1];
+
+RESULT( v[2])
+
+
+EQUATION("BrownCapital")
 /*
 Evolution of brown capital.
 */
 
-v[0] = VL("Brown Capital", 1);
-v[1] = V("Brown Investment");
+v[0] = VL("BrownCapital", 1);
+v[1] = V("BrownInvestment");
+
+/*
 v[2] = V("Delta");
 
 v[3] = v[0] + v[1] - (v[2] * v[0]);
+*/
+
+v[3] = v[0] + v[1];
 
 RESULT( v[3])
 
 
-EQUATION("Green Capital")
+EQUATION("GreenCapital")
 /*
 Evolution of green capital.
 */
 
-v[0] = VL("Green Capital", 1);
-v[1] = V("Brown Investment");
+v[0] = VL("GreenCapital", 1);
+v[1] = V("GreenInvestment");
+
+/*
 v[2] = V("Delta");
 
 v[3] = v[0] + v[1] - (v[2] * v[0]);
+*/
+
+v[3] = v[0] + v[1];
 
 RESULT( v[3])
 
 
-EQUATION("Brown Investment")
+EQUATION("BrownInvestment")
 /*
-Comment
+Initialisation et calcul de l'investissement brun pour t == 1, puis mise à jour avec BrownLoansVar pour t > 1.
 */
 
-v[0] = V("BrownLoansVar");
+v[0] = VS(c, "IdSector"); // Secteur de l'entreprise
+v[1] = 0; // Initialisation de l'investissement brun
 
-RESULT( v[0])
+// Initialisation spécifique pour t == 1
+if (t == 1) {
+    if (v[0] == 1 && V("NumberAgriculturalFirms") > 0) {
+        v[1] = 81.746 / V("NumberAgriculturalFirms");
+    } 
+    if (v[0] == 2 && V("NumberEnergyFirms") > 0) {
+        v[1] = 128.109 / V("NumberEnergyFirms");
+    } 
+    if (v[0] == 3 && V("NumberHousingFirms") > 0) {
+        v[1] = 1 / V("NumberHousingFirms");
+    } 
+    if (v[0] == 4 && V("NumberTransportationFirms") > 0) {
+        v[1] = 7 / V("NumberTransportationFirms");
+    } 
+    if (v[0] == 5 && V("NumberIndustryFirms") > 0) {
+        v[1] = 478 / V("NumberIndustryFirms");
+    } 
+    if (v[0] == 6 && V("NumberTCFirms") > 0) {
+        v[1] = 507 / V("NumberTCFirms");
+    } 
+} else {
+    // Pour t > 1 : BrownInvestment = BrownLoansVar uniquement
+    v[1] = V("BrownLoansVar");
+}
+
+RESULT(v[1]) // Retourne l'investissement brun total
 
 
-EQUATION("Green Investment")
+
+EQUATION("GreenInvestment")
 /*
-Comment
+Initialisation et calcul de l'investissement vert pour t == 1, puis mise à jour avec GreenLoansVar et l'investissement public si SelectedChampions = 1.
 */
 
-v[0] = V("GreenLoansVar");
+v[0] = VS(c, "IdSector"); // Secteur de l'entreprise
+v[1] = 0; // Initialisation de l'investissement vert
 
-RESULT( v[0])
+// Initialisation spécifique pour t == 1
+if (t == 1) {
+    if (v[0] == 1 && V("NumberAgriculturalFirms") > 0) {
+        v[1] = 10 / V("NumberAgriculturalFirms");
+    } 
+    if (v[0] == 2 && V("NumberEnergyFirms") > 0) {
+        v[1] = 100 / V("NumberEnergyFirms");
+    } 
+    if (v[0] == 3 && V("NumberHousingFirms") > 0) {
+        v[1] = 100 / V("NumberHousingFirms");
+    } 
+    if (v[0] == 4 && V("NumberTransportationFirms") > 0) {
+        v[1] = 200 / V("NumberTransportationFirms");
+    } 
+    if (v[0] == 5 && V("NumberIndustryFirms") > 0) {
+        v[1] = 20 / V("NumberIndustryFirms");
+    } 
+    if (v[0] == 6 && V("NumberTCFirms") > 0) {
+        v[1] = 30 / V("NumberTCFirms");
+    } 
+} else {
+    // Pour t > 1 : mise à jour avec GreenLoansVar et l'investissement public si SelectedChampions = 1
+    v[1] = V("GreenLoansVar");
+    v[2] = VS(c, "SelectedChampions"); // Vérifie si l'entreprise est une championne
 
+    if (v[2] == 1) {
+        if (v[0] == 1) {
+            v[1] += V("PubInvestmentAg");
+        } 
+        if (v[0] == 2) {
+            v[1] += V("PubInvestmentEner");
+        } 
+        if (v[0] == 3) {
+            v[1] += V("PubInvestmentHous");
+        } 
+        if (v[0] == 4) {
+            v[1] += V("PubInvestmentTrans");
+        } 
+        if (v[0] == 5) {
+            v[1] += V("PubInvestmentInd");
+        } 
+        if (v[0] == 6) {
+            v[1] += V("PubInvestmentTC");
+        } 
+    }
+}
+
+RESULT(v[1]) // Retourne l'investissement vert total
 
 
 EQUATION("BrownLoansDem")
@@ -2653,7 +3450,7 @@ Comment
 */
 
 v[0] = V("GrKdB");
-v[1] = VL("Brown Capital", 1);
+v[1] = VL("BrownCapital", 1);
 
 v[2] = v[0] * v[1];
 
@@ -2666,7 +3463,7 @@ Comment
 */
 
 v[0] = V("GrKdV");
-v[1] = VL("Green Capital", 1);
+v[1] = VL("GreenCapital", 1);
 
 v[2] = v[0] * v[1];
 
@@ -2679,14 +3476,14 @@ Comment
 */
 
 v[0] = V("Animal Spirits_B");
-v[1] = V("gamma1_B");
-v[2] = V("gamma2_B");
-v[3] = V("gamma3_B");
-v[4] = V("gamma4_B");
+v[1] = V("gamma1");
+v[2] = V("gamma2");
+v[3] = V("gamma3");
+v[4] = V("gamma4");
 v[5] = V("ratiocashflow");
 v[6] = V("LeverageFirm");
 v[7] = V("capacityutilization");
-v[8] = V("BrownLoanInterestRate");
+v[8] = V("LoanInterestRate");
 
 v[9] = v[0] + v[1] * v[5] - v[2] * v[6] + v[3] * v[7] - v[4] * v[8];
 
@@ -2698,14 +3495,14 @@ EQUATION("GrKdV")
 Comment
 */
 
-v[0] = V("Animal Spirits_V");
-v[1] = V("gamma1_V");
-v[2] = V("gamma2_V");
-v[3] = V("gamma3_V");
-v[4] = V("gamma4_V");
+v[0] = V("AnimalSpirits_V");
+v[1] = V("gamma1");
+v[2] = V("gamma2");
+v[3] = V("gamma3");
+v[4] = V("gamma4");
 v[5] = V("ratiocashflow");
 v[6] = V("LeverageFirm");
-v[7] = V("capacityutilization");
+v[7] = V("apacityutilization");
 v[8] = V("GreenLoanInterestRate");
 
 v[9] = v[0] + v[1] * v[5] - v[2] * v[6] + v[3] * v[7] - v[4] * v[8];
@@ -2713,7 +3510,68 @@ v[9] = v[0] + v[1] * v[5] - v[2] * v[6] + v[3] * v[7] - v[4] * v[8];
 RESULT( v[9])
 
 
+EQUATION("ratiocashflow")
+/*
+Comment
+*/
 
+v[0] = V("Profit");
+v[1] = VL("TotalCapital", 1);
+
+v[2] = v[0] / v[1];
+
+RESULT( v[2])
+
+
+EQUATION("capacityutilization")
+/*
+Comment
+*/
+
+v[0] = V("Production");
+v[1] = V("FullCapacityProduction");
+
+v[2] = v[0] / v[1];
+
+RESULT( v[2])
+
+
+EQUATION("FullCapacityProduction")
+/*
+Comment
+*/
+
+v[0] = V("FullCapacityFactor");
+v[1] = V("TotalCapital");
+
+v[2] = v[0] * v[1];
+
+RESULT( v[2])
+
+
+EQUATION("LeverageFirm")
+/*
+Leverage of firms.
+*/
+
+v[0] = V("TotalDebtFirm");
+v[1] = V("TotalCapital");
+
+v[2] = v[0] / v[1];
+
+RESULT( v[2])
+
+
+
+
+/*EQUATIONS RELATIVES AUX VENTES*/
+/*EQUATIONS RELATIVES AUX VENTES*/
+/*EQUATIONS RELATIVES AUX VENTES*/
+/*EQUATIONS RELATIVES AUX VENTES*/
+/*EQUATIONS RELATIVES AUX VENTES*/
+/*EQUATIONS RELATIVES AUX VENTES*/
+/*EQUATIONS RELATIVES AUX VENTES*/
+/*EQUATIONS RELATIVES AUX VENTES*/
 /*EQUATIONS RELATIVES AUX VENTES*/
 
 
@@ -2840,7 +3698,7 @@ retourne la periode a laquelle la techno 2 a ete adoptee pour la premiere fois
 V("EndTrade");
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
   v[0]=VS(cur,"Portfolio");
   if(v[0]!=0)
@@ -2915,20 +3773,60 @@ EQUATION("Profits")
 Profits de la firme
 */
 V("EndTrade");
-v[3]=0;
+v[3] = 0;
 
 CYCLE(cur, "Product")
- {
-  v[0]=VLS(cur,"Markup",1);
-  v[1]=VLS(cur,"Costs",1);
-  v[2]=VS(cur,"Sales_Prod");
-  v[3]=v[3]+v[0]*v[1]*v[2];
- }
+{
+    v[0] = VLS(cur, "Markup", 1);
+    v[1] = VLS(cur, "Costs", 1);
+    v[2] = VS(cur, "Sales_Prod");
+    v[3] += v[0] * v[1] * v[2];
+}
 
-v[4]=V("Fixed_Costs");
-v[5]=v[3]-v[4];
+v[4] = V("Fixed_Costs");
+v[5] = v[3] - v[4];
 
-RESULT( v[5])
+v[6] = V("SubsidiesAg");   // Subvention pour le secteur 0 (Agriculture)
+v[7] = V("SubsidiesEner"); // Subvention pour le secteur 1 (Énergie)
+v[8] = V("SubsidiesHous"); // Subvention pour le secteur 3 (Habitation)
+v[9] = V("SubsidiesTrans");// Subvention pour le secteur 4 (Transport)
+v[10] = V("SubsidiesInd"); // Subvention pour le secteur 5 (Industrie)
+v[11] = V("SubsidiesTC");  // Subvention pour le secteur 6 (Technologie et Communication)
+v[12] = V("TaxRate");      // Taux d'impôt de production
+v[13] = 0;                 // Initialisation du compteur d'entreprises du secteur 5
+
+// Compter le nombre d'entreprises du secteur 5
+CYCLE(cur, "Firms")
+{
+    if (VS(cur, "IdSector") == 5)
+        v[13] += 1;
+}
+
+// Appliquer les subventions en fonction du secteur
+if (V("IdSector") == 0) {
+    v[5] += v[6];  // Subvention pour le secteur 0 (Agriculture)
+} else if (V("IdSector") == 1) {
+    v[5] += v[7];  // Subvention pour le secteur 1 (Énergie)
+} else if (V("IdSector") == 3) {
+    v[5] += v[8];  // Subvention pour le secteur 3 (Habitation)
+} else if (V("IdSector") == 4) {
+    v[5] += v[9];  // Subvention pour le secteur 4 (Transport)
+} else if (V("IdSector") == 5) {
+    v[5] += v[10];  // Subvention pour le secteur 5 (Industrie)
+    
+    // Ajouter l'investissement total divisé par le nombre d'entreprises du secteur 5
+    if (v[13] > 0) {
+        v[5] += V("TotalInvestment") / v[13];
+    }
+} else if (V("IdSector") == 6) {
+    v[5] += v[11];  // Subvention pour le secteur 6 (Technologie et Communication)
+}
+
+// Calculer les impôts de production
+v[14] = v[5] * v[12];  // Impôt de production
+v[5] -= v[14];  // Appliquer l'impôt
+
+RESULT(v[5]);
 
 
 EQUATION("Costs")
@@ -3043,7 +3941,7 @@ Le budget moyen
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
 
  { 
    v[2]=VS(cur,"Budget");
@@ -3065,7 +3963,7 @@ nombre cumule de faillites
 */
 v[0]=VL("Failures",1);
 
-CYCLE(cur, "Firm")//on s'assure que les budgets ont ete calcules et on calcule le nb cumule de faillites
+CYCLE(cur, "Firms")//on s'assure que les budgets ont ete calcules et on calcule le nb cumule de faillites
  {
   VS(cur,"Budget");
   v[1]=VS(cur,"Dead");
@@ -3091,7 +3989,7 @@ processus de sorties de firmes
 */
 V("Failures");
 
-CYCLE(cur, "Firm")//on fait sortir les firmes qui quittent le marche
+CYCLE(cur, "Firms")//on fait sortir les firmes qui quittent le marche
  {
   VS(cur,"Budget");
   v[1]=VS(cur,"Dead");
@@ -3399,7 +4297,7 @@ nb total de firmes sur le marche
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
 {
  	VS(cur,"Budget");//on s'assure que les sorties ont eu lieu (et les entrees)
   v[0]=v[0]+1;
@@ -3419,7 +4317,7 @@ EQUATION("Delete")
 supprime les objets Product_Purchase 
 */
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
 {
  	VS(cur,"Budget");//on s'assure que les sorties ont eu lieu (et les entrees)
   v[0]=VS(cur,"Dead");
@@ -3442,7 +4340,7 @@ EQUATION("Create")
 cree les ojets Product_Purchase 
 */
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {  
 	v[3]=VS(cur,"NewFirm");
   if(v[3]==1)// si la firme est nouvelle on cree ses produits
@@ -3513,15 +4411,21 @@ EQUATION("ms_Product1")
 Part de march? de la technologie 1
 */
 V("EndTrade");
-v[0]=V("Total_Households");
-v[1]=0;
-CYCLE(cur, "Household")
- {
-  v[2]=VS(cur,"Product_Type");
-  if(v[2]==1)
-  v[1]+=1;
- }
-v[3]=v[1]/v[0];
+v[0] = V("Total_Households");
+v[1] = 0;
+
+if (v[0] > 0)  // Vérifier que Total_Households est valide
+{
+  CYCLE(cur, "Households")
+  {
+    v[2] = VS(cur, "Product_Type");
+    if (v[2] == 1)
+      v[1] += 1;
+  }
+  v[3] = v[1] / v[0];
+}
+else
+  v[3] = 0;  // Éviter NaN si Total_Households = 0
 
 RESULT(v[3])
 
@@ -3533,16 +4437,21 @@ EQUATION("ms_Product2")
 Part de march? de la technologie 2
 */
 V("EndTrade");
-v[0]=V("Total_Households");
-v[1]=0;
-CYCLE(cur, "Household")
- {
-  v[2]=VS(cur,"Product_Type");
-  if(v[2]==2)
-  v[1]+=1;
- }
-v[3]=v[1]/v[0];
+v[0] = V("Total_Households");
+v[1] = 0;
 
+if (v[0] > 0)  // Vérifier que Total_Households est valide
+{
+  CYCLE(cur, "Households")
+  {
+    v[2] = VS(cur, "Product_Type");
+    if (v[2] == 1)
+      v[1] += 2;
+  }
+  v[3] = v[1] / v[0];
+}
+else
+  v[3] = 0;  // Éviter NaN si Total_Households = 0
 RESULT(v[3])
 
 
@@ -3599,7 +4508,7 @@ La performance moyenne de l'industrie réalisee sur K
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
 
  { 
    v[2]=VS(cur,"K");
@@ -3622,7 +4531,7 @@ La performance moyenne de l'industrie réalisée sur swintching_costs
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
 
  { 
    v[2]=VS(cur,"Switching_Costs");
@@ -3778,7 +4687,7 @@ v[5]=VL("Average_RD_Watch",1);
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
    v[2]=VS(cur,"RD_Watch");
    if(v[2]!=0)
@@ -3928,7 +4837,7 @@ Fonction appelee par Update_Purchase pour mise a jour
 Mise ? jour en fin de p?riode
 */
 
-CYCLE(cur, "Firm")// on s'assure que chaque firme a fini son processus d'innovation et son choix de technologie
+CYCLE(cur, "Firms")// on s'assure que chaque firme a fini son processus d'innovation et son choix de technologie
  {
   VS(cur,"Innovation");
   VS(cur,"Adoption_Product2");
@@ -3938,7 +4847,7 @@ CYCLE(cur, "Firm")// on s'assure que chaque firme a fini son processus d'innovat
 v[0]=VS(c,"IdFirm_Purchase");
 v[1]=VS(c,"IdProduct_Purchase");
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
   v[2]=VS(cur,"IdFirm");
   if(v[2]==v[0])
@@ -3978,14 +4887,14 @@ EQUATION("Min_Price")
 /*
 retourne le min sur Price
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
  
 v[0]=100000000;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  CYCLES(cur, cur1, "Product")
   {
@@ -4007,14 +4916,14 @@ EQUATION("Min_Tox")
 /*
 retourne le min sur Tox
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
  
 v[0]=100000000;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  CYCLES(cur, cur1, "Product")
   {
@@ -4035,14 +4944,14 @@ EQUATION("Min_Bio")
 /*
 retourne le min sur bio
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
  
 v[0]=100000000;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  CYCLES(cur, cur1, "Product")
   {
@@ -4064,14 +4973,14 @@ EQUATION("Max_X")
 /*
 retourne le max sur X
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
  
 v[0]=-1000000000;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  CYCLES(cur, cur1, "Product")
   {
@@ -4093,7 +5002,7 @@ EQUATION("Average_Costs_T1")
 Costs moyen de la techno 1
 
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
@@ -4103,7 +5012,7 @@ v[8]=VL("Average_Costs_T1",1);
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  	v[5]=VS(cur,"Portfolio");
  	if(v[5]!=2)//si produit 1 adopte
@@ -4135,7 +5044,7 @@ EQUATION("Average_Costs_T2")
 Cout moyen de la techno 2
 
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
@@ -4145,7 +5054,7 @@ v[8]=VL("Average_Costs_T2",1);
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  	v[5]=VS(cur,"Portfolio");
  	if(v[5]!=0)//si produit 2 adopte
@@ -4176,7 +5085,7 @@ EQUATION("Average_X_T1")
 X moyen de la techno 1
 
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
@@ -4186,7 +5095,7 @@ v[8]=VL("Average_X_T1",1);
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  	v[5]=VS(cur,"Portfolio");
  	if(v[5]!=2)//si produit 1 adopte
@@ -4218,7 +5127,7 @@ EQUATION("Average_X_T2")
 X moyen de la techno 2. !!!! modifi? car pb en cas de reglementation stricte !!!
 
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
@@ -4228,7 +5137,7 @@ v[8]=V("Product2_Init_X");// !!!!!!!
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  	v[5]=VS(cur,"Portfolio");
  	if(v[5]!=0)//si produit 2 adopte
@@ -4259,7 +5168,7 @@ EQUATION("Average_Bio_T1")
 Bio moyen de la techno 1
 
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
@@ -4269,7 +5178,7 @@ v[8]=VL("Average_Bio_T1",1);
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  	v[5]=VS(cur,"Portfolio");
  	if(v[5]!=2)//si produit 1 adopte
@@ -4301,7 +5210,7 @@ EQUATION("Average_Bio_T2")
 Bio moyen de la techno 2 !!!! modifi? car pb en cas de reglementation stricte !!!
 
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
@@ -4311,7 +5220,7 @@ v[8]=V("Product2_Init_Bio");// !!!!!!!
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  	v[5]=VS(cur,"Portfolio");
  	if(v[5]!=0)//si produit 2 adopte
@@ -4342,7 +5251,7 @@ EQUATION("Average_Tox_T1")
 Tox moyen de la techno 1
 
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
@@ -4352,7 +5261,7 @@ v[8]=VL("Average_Tox_T1",1);
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  	v[5]=VS(cur,"Portfolio");
  	if(v[5]!=2)//si produit 1 adopte
@@ -4384,7 +5293,7 @@ EQUATION("Average_Tox_T2")
 Tox moyen de la techno 2. !!!! modifi? car pb en cas de reglementation stricte !!!
 
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
@@ -4394,7 +5303,7 @@ v[8]=V("Product2_Init_Tox");// !!!!!!!
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  	v[5]=VS(cur,"Portfolio");
  	if(v[5]!=0)//si produit 2 adopte
@@ -4425,7 +5334,7 @@ EQUATION("Average_Eff_T1")
 Eff moyen de la techno 1
 
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
@@ -4435,7 +5344,7 @@ v[8]=VL("Average_Eff_T1",1);
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  	v[5]=VS(cur,"Portfolio");
  	if(v[5]!=2)//si produit 1 adopte
@@ -4467,7 +5376,7 @@ EQUATION("Average_Eff_T2")
 Eff moyen de la techno 2. !!!! modifi? car pb en cas de reglementation stricte !!!
 
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
@@ -4477,7 +5386,7 @@ v[8]=V("Product2_Init_Eff");// !!!!!!!
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  	v[5]=VS(cur,"Portfolio");
  	if(v[5]!=0)//si produit 2 adopte
@@ -4505,52 +5414,51 @@ RESULT(v[4])
 
 EQUATION("Markup")
 /*
-markup endogene
+markup endogène
 */
-v[0]=V("NewFirm");
-if(v[0]==1)//si la firme est un nouvel entrant
-{
-	v[20]=V("IdProduct");
-	if(v[20]==1)//si c'est un produit de type T1
-	{
-		v[1]=VL("Average_Markup_T1",1);
-		v[2]=v[1];
-	}
-	if(v[20]==2)//si c'est un produit de type T2
-	{
-		v[1]=VL("Average_Markup_T2",1);
-		v[2]=v[1];
-	}
+v[0] = V("NewFirm");  // Si la firme est un nouvel entrant
+if (v[0] == 1) {
+    v[20] = V("IdProduct");
+    if (v[20] == 1) {  // Si c'est un produit de type T1
+        v[1] = VL("Average_Markup_T1", 1);
+        v[2] = v[1];
+    }
+    if (v[20] == 2) {  // Si c'est un produit de type T2
+        v[1] = VL("Average_Markup_T2", 1);
+        v[2] = v[1];
+    }
+} else {
+    v[3] = VL("Markup", 1);
+
+    v[4] = V("IsAdopted");
+    if (v[4] == 0) {  // Si le produit n'existe pas, on garde le markup
+        END_EQUATION(v[3]);
+    }
+
+    v[5] = V("ms_sales_Product");
+    v[6] = V("Inverse_HHI");
+    v[7] = V("IdProduct");
+
+    if (v[7] == 1) {
+        v[8] = V("Max_ms_sales_Product_T1");
+        v[9] = V("Min_ms_sales_Product_T1");
+    }
+    if (v[7] == 2) {
+        v[8] = V("Max_ms_sales_Product_T2");
+        v[9] = V("Min_ms_sales_Product_T2");
+    }
+
+    // Vérification pour éviter la division par zéro
+    if (v[6] == 0) {
+        v[2] = 0;  // Si Inverse_HHI est 0, retourner 0 ou une autre valeur par défaut
+    } else if (v[8] == v[9]) {  // Si monopole ou équirepartition des ms
+        v[2] = v[5] + 1 / v[6];
+    } else {
+        v[2] = ((v[5] - v[9]) / (v[8] - v[9])) + 1 / v[6];
+    }
 }
-else
-{
-	v[3]=VL("Markup",1);
 
-	v[4]=V("IsAdopted");
-	if(v[4]==0)// si le produit n'existe pas on garde le markup
-	END_EQUATION(v[3]);
-
-	v[5]=V("ms_sales_Product");
-	v[6]=V("Inverse_HHI");
-	v[7]=V("IdProduct");
-	if(v[7]==1)
-	{
-		v[8]=V("Max_ms_sales_Product_T1");
-		v[9]=V("Min_ms_sales_Product_T1");
-	}
-	if(v[7]==2)
-	{
-		v[8]=V("Max_ms_sales_Product_T2");
-		v[9]=V("Min_ms_sales_Product_T2");
-	}
-
-	if(v[8]==v[9])//si monopole ou equirepartition des ms
-	v[2]=v[5]+1/v[6];
-	else
-	v[2]=((v[5]-v[9])/(v[8]-v[9]))+1/v[6];
-}
-
-RESULT(v[2] )
+RESULT(v[2])  // Résultat du markup
 
 
 EQUATION("Average_Markup_T1")
@@ -4564,7 +5472,7 @@ v[8]=VL("Average_Markup_T1",1);
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  		CYCLES(cur, cur1, "Product")
   		{		
@@ -4599,7 +5507,7 @@ v[8]=VL("Average_Markup_T2",1);
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  		CYCLES(cur, cur1, "Product")
   		{		
@@ -4630,7 +5538,7 @@ EQUATION("Max_ms_sales_Product_T1")
 
 v[0]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  CYCLES(cur, cur1, "Product")
   {
@@ -4658,7 +5566,7 @@ EQUATION("Max_ms_sales_Product_T2")
 
 v[0]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  CYCLES(cur, cur1, "Product")
   {
@@ -4686,7 +5594,7 @@ EQUATION("Min_ms_sales_Product_T1")
 
 v[0]=1;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  CYCLES(cur, cur1, "Product")
   {
@@ -4714,7 +5622,7 @@ EQUATION("Min_ms_sales_Product_T2")
 
 v[0]=1;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  CYCLES(cur, cur1, "Product")
   {
@@ -4743,7 +5651,7 @@ V("EndTrade");
 
 
 v[0]=0;
-CYCLE(cur,"Firm")
+CYCLE(cur,"Firms")
 {
 v[1]=VS(cur,"ms_sales");
 v[0]+=v[1]*v[1];
@@ -4766,7 +5674,7 @@ v[0]=VL("Bio_Acc",1);
 v[1]=V("Absorption");//capacite d'absorption du milieu
 
 v[5]=0;
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
 	CYCLES(cur, cur1, "Product")
  {
@@ -4795,7 +5703,7 @@ v[0]=VL("Tox_Acc",1);
 v[1]=V("Toxmin_Prod1");//reflete la dose journaliere admissible
 
 v[5]=0;
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
 	CYCLES(cur, cur1, "Product")
  {
@@ -4841,7 +5749,7 @@ v[8]=VL("Average_Tox",1);
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  		CYCLES(cur, cur1, "Product")
   		{		
@@ -4871,7 +5779,7 @@ v[8]=VL("Average_Bio",1);
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  		CYCLES(cur, cur1, "Product")
   		{		
@@ -4902,7 +5810,7 @@ v[8]=VL("Average_Costs",1);
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  		CYCLES(cur, cur1, "Product")
   		{		
@@ -4933,7 +5841,7 @@ v[8]=VL("Average_X",1);
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  		CYCLES(cur, cur1, "Product")
   		{		
@@ -4963,7 +5871,7 @@ v[8]=VL("Average_Eff",1);
 v[0]=0;
 v[1]=0;
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  		CYCLES(cur, cur1, "Product")
   		{		
@@ -4987,14 +5895,14 @@ EQUATION("Absolute_maxX_P2")
 valeur de X la plus eleve jusqu'a present pour le produit 2
 */
 
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
  
 v[0]=VL("Absolute_maxX_P2",1);
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  	v[5]=VS(cur,"Portfolio");
  	if(v[5]!=0)//si produit 2 adopte
@@ -5019,14 +5927,14 @@ EQUATION("Absolute_maxEff_P2")
 /*
 valeur de Eff la plus forte jusqu'a present pour le produit 2
 */
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
  
 v[0]=VL("Absolute_maxEff_P2",1);
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  	v[5]=VS(cur,"Portfolio");
  	if(v[5]!=0)//si produit 2 adopte
@@ -5052,14 +5960,14 @@ EQUATION("Absolute_minTox_P2")
 valeur de Tox la plus faible jusqu'a present pour le produit 2
 */
 
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
  
 v[0]=VL("Absolute_minTox_P2",1);
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  	v[5]=VS(cur,"Portfolio");
  	if(v[5]!=0)//si produit 2 adopte
@@ -5085,14 +5993,14 @@ EQUATION("Absolute_minBio_P2")
 valeur de Bio la plus faible jusqu'a present pour le produit 2
 */
 
-CYCLE(cur, "Firm")//on s'assure que le processus d'innovation a eu lieu
+CYCLE(cur, "Firms")//on s'assure que le processus d'innovation a eu lieu
  {
   VS(cur,"Innovation");
  }
  
 v[0]=VL("Absolute_minBio_P2",1);
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  {
  	v[5]=VS(cur,"Portfolio");
  	if(v[5]!=0)//si produit 2 adopte
@@ -5133,7 +6041,7 @@ if(t==(v[0]+v[1]))
 	if(v[2]>=v[4]&&v[3]>=v[5])//si les seuils sont satisfaits on regarde le nb de firmes restantes
 	{
 		v[10]=0;
-		CYCLE(cur, "Firm")//compte le nb de sorties en cas d'interdiction de T1
+		CYCLE(cur, "Firms")//compte le nb de sorties en cas d'interdiction de T1
  			{
   				v[11]=VS(cur,"Portfolio");
   				if(v[11]==0)
@@ -5181,7 +6089,7 @@ EQUATION("EndTrade")
 /*
 S'assure que chaque client a effectu? son processus d'achat
 */
-CYCLE(cur, "Household")
+CYCLE(cur, "Households")
  VS(cur,"ProdUsed");
 
 RESULT( 1)
@@ -5192,7 +6100,7 @@ EQUATION("InitTrade")
 Initialise la valeur des attributs des firmes au d?but de chaque p?riode
 */
 
-CYCLE(cur, "Firm")
+CYCLE(cur, "Firms")
  { 
  	WRITES(cur,"NewFirm",0);
   WRITES(cur,"Sales",0);
@@ -5214,7 +6122,7 @@ EQUATION("Total_Households")
 compte le nb de clients
 */
 v[1]=0;
-CYCLE(cur, "Household")
+CYCLE(cur, "Households")
  {
   v[0]=VS(cur,"ProdUsed");
   if(v[0]!=0)//si le client a un produit
