@@ -1,0 +1,952 @@
+import pandas as pd
+import numpy as np
+import random
+import time
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Début du chronomètre
+start_time = time.time()
+
+# Paramètres du modèle
+sectors = ["Agriculture", "Energy", "Housing", "Transport", "Industry", "Technology"]
+num_firms = 120
+num_banks = 10
+num_households = 600
+num_centralbank = 1
+num_periods = 25
+num_simulations = 10
+
+# Initialisation structurelle des 600 ménages
+random.seed(42)
+np.random.seed(42)
+
+    # Part de consommation normalisée par secteur pour les territoires ruraux
+rural_prefs = {
+    "AgPref": 0.24,
+    "EnerPref": 0.19,
+    "HousPref": 0.19,
+    "TransPref": 0.24,
+    "IndPref": 0.09,
+    "TCPref": 0.05
+}
+
+# Part de consommation normalisée par secteur pour les territoires urbains
+urban_prefs = {
+    "AgPref": 0.21,
+    "EnerPref": 0.16,
+    "HousPref": 0.29,
+    "TransPref": 0.19,
+    "IndPref": 0.1,
+    "TCPref": 0.05
+}
+
+# Initialisation des 600 ménages avec statut, compétences et préférences
+households_struct = []
+
+# Statuts 1, 2 : emploi brun/vert non qualifié
+for _ in range(171):
+    status, skill = 1, 0
+    id_territory = np.random.choice([0, 1])
+    prefs = rural_prefs if id_territory == 0 else urban_prefs
+    h = {"Status": status, "SkillStatus": skill, "IdTerritory": id_territory}
+    h.update(prefs)
+    households_struct.append(h)
+
+for _ in range(179):
+    status, skill = 2, 0
+    id_territory = np.random.choice([0, 1])
+    prefs = rural_prefs if id_territory == 0 else urban_prefs
+    h = {"Status": status, "SkillStatus": skill, "IdTerritory": id_territory}
+    h.update(prefs)
+    households_struct.append(h)
+
+# Statut 3 : chômage (non qualifié)
+for _ in range(44):
+    status, skill = 3, 0
+    id_territory = np.random.choice([0, 1])
+    prefs = rural_prefs if id_territory == 0 else urban_prefs
+    h = {"Status": status, "SkillStatus": skill, "IdTerritory": id_territory}
+    h.update(prefs)
+    households_struct.append(h)
+
+# Statut 3 : chômage (qualifié)
+for _ in range(16):
+    status, skill = 3, 1
+    id_territory = np.random.choice([0, 1])
+    prefs = rural_prefs if id_territory == 0 else urban_prefs
+    h = {"Status": status, "SkillStatus": skill, "IdTerritory": id_territory}
+    h.update(prefs)
+    households_struct.append(h)
+
+# Statuts 5, 6 : emploi brun/vert qualifié
+for _ in range(89):
+    status, skill = 5, 1
+    id_territory = np.random.choice([0, 1])
+    prefs = rural_prefs if id_territory == 0 else urban_prefs
+    h = {"Status": status, "SkillStatus": skill, "IdTerritory": id_territory}
+    h.update(prefs)
+    households_struct.append(h)
+
+for _ in range(101):
+    status, skill = 6, 1
+    id_territory = np.random.choice([0, 1])
+    prefs = rural_prefs if id_territory == 0 else urban_prefs
+    h = {"Status": status, "SkillStatus": skill, "IdTerritory": id_territory}
+    h.update(prefs)
+    households_struct.append(h)
+
+# Mélange aléatoire pour éviter les biais
+random.shuffle(households_struct)
+
+# IdTerritory (0 = rural, 1 = urbain)
+for h in households_struct:
+    h["IdTerritory"] = np.random.choice([0, 1])
+
+# IdEmployer : si emploi, alors affectation à une firme
+for h in households_struct:
+    if h["Status"] in [1, 2, 5, 6]:
+        h["IdEmployer"] = random.randint(0, num_firms - 1)
+    else:
+        h["IdEmployer"] = -1
+
+general_inflation = [0.02 for _ in range(num_periods)]
+price_ag_list = [1.0]
+price_ener_list = [1.0]
+price_hous_list = [1.0]
+price_trans_list = [1.0]
+
+# Liste pour stocker tous les résultats
+all_results = []
+
+# Simulation
+for sim in range(num_simulations):
+    firm_list = []
+    for i in range(num_firms):
+        firm = {
+            "FirmID": i,
+            "ProductivityFactor": random.uniform(0.0, 0.3),
+            "IdBank": random.randint(0, num_banks - 1),
+            "BrownCapital": [random.uniform(50, 150)],
+            "GreenCapital": [random.uniform(25, 100)],
+            "BrownInvestment": [],
+            "GreenInvestment": [],
+            "BrownInvDes": [],
+            "GreenInvDes": [],
+            "BrownLoansDem": [],
+            "GreenLoansDem": [],
+            "BrownLoansVar": [],
+            "GreenLoansVar": [],
+            "Profits": [random.uniform(20, 100)],
+            "TotalDebt": [random.uniform(50, 300)],
+            "LoanInterestRate": [],
+            "GreenLoanInterestRate": [],
+            "AnimalSpirits_B": [],
+            "AnimalSpirits_V": [],
+            "gamma1": [],
+            "gamma2": [],
+            "gamma3": [],
+            "gamma4": [],
+            "GrKdB": [0],
+            "GrKdV": [0],
+            "ratiocashflow": [],
+            "LeverageFirm": [],
+            "FullCapacityProduction": [],
+            "BrownLoans": [],
+            "GreenLoans": [],
+            "CreditConstraintVar": [],
+            "CreditConstraintInt": [],
+            "TotalCapital": [],
+            "GreenCapitalRatio": [],
+            "IdSector": sectors.index(sectors[i % len(sectors)]) + 1,
+            "SelectedChampions": 1 if random.random() < 0.2 else 0,  # 20% des firmes sont champions
+
+        }
+        firm_list.append(firm)
+
+    bank_list = []
+    for b in range(num_banks):
+        bank = {
+            "BankID": b,
+            "TargetLeverage": [],
+            "BanksAnimalSpirits": [],
+            "Failures": [random.randint(0, 3)],
+            "RiskAppetite": [],
+            "GreenLoansBank": [],
+            "BrownLoansBank": [],
+            "GreenAssetRatio": [],
+            "BankLoans": [],
+            "MarketShareBank": [],
+        }
+        bank_list.append(bank)
+
+    # Initialisation complète des ménages
+    household_list = []
+    for h in households_struct:
+        income_init = random.uniform(20, 50)
+        savings_init = random.uniform(10, 40)
+
+        # Préférences selon le territoire
+        prefs = rural_prefs if h["IdTerritory"] == 0 else urban_prefs
+
+        household = {
+            "Status": h["Status"],
+            "SkillStatus": h["SkillStatus"],
+            "IdTerritory": h["IdTerritory"],
+            "IdEmployer": h["IdEmployer"],
+            "AgPref": prefs["AgPref"],
+            "EnerPref": prefs["EnerPref"],
+            "HousPref": prefs["HousPref"],
+            "TransPref": prefs["TransPref"],
+            "IndPref": prefs["IndPref"],
+            "TCPref": prefs["TCPref"],
+            "DisposableIncome": [income_init],
+            "Income": [income_init],
+            "FinancialIncome": [0.01 * savings_init],
+            "Red": [random.uniform(2, 5)],
+            "TaxesInd": [0.2 * income_init],
+            "HouseholdDebtService": [0.03 * random.uniform(10, 40)],
+            "LoanRateCons": [0.03],
+            "HouseholdNewDebt": [0],
+            "HouseholdTotalDebt": [random.uniform(10, 40)],
+            "BaseConsumption": [random.uniform(25, 35)],
+            "Consumption": [random.uniform(20, 45)],
+            "Savings": [savings_init],
+            "DepositInterestRate": [0.01],
+            "TaxRate": [0.2],
+            "PropensityToConsumeDI": [0.6],
+            "PropensityToConsumeSavings": [0.3],
+            "NeedsIndex": [100.0],
+            "GrNeedsIndex": [],
+            "VoteDecision": [random.randint(0, 1)],
+            "DistanceToJob": random.uniform(3, 7) if h["IdTerritory"] == 0 else random.uniform(0.5, 3),
+
+
+        }
+        household_list.append(household)
+
+
+    central_bank_rate = [0.02] * num_periods
+    bandwagon_effect = []
+    TransitionActive = []
+    minimum_wage = [20]
+    unemployment_benefit = [12]
+    base_wage = 20
+    green_premium = 0.05
+    skill_premium = 0.25
+    green_skill_premium = 0.30
+    firms_by_bank = {b: [] for b in range(num_banks)}
+    for firm in firm_list:
+        firms_by_bank[firm["IdBank"]].append(firm)
+
+
+    for t in range(num_periods):
+
+        if t < 2:
+            bandwagon_effect.append(0.0)
+        else:
+            n_0to1 = 0
+            n_1to0 = 0
+
+            for household in household_list:
+                vote_t2 = household["VoteDecision"][t - 2]
+                vote_t1 = household["VoteDecision"][t - 1]
+                if vote_t2 == 0 and vote_t1 == 1:
+                    n_0to1 += 1
+                if vote_t2 == 1 and vote_t1 == 0:
+                    n_1to0 += 1
+
+            net_shift = n_0to1 - n_1to0
+            bandwagon = net_shift / num_households
+            bandwagon_effect.append(bandwagon)
+
+
+        if t == 0:
+            minimum_wage = [20]
+        else:
+            prev_wage = minimum_wage[t - 1]
+            increase_rate = 0.02 if TransitionActive[t - 1] == 1 else 0.0
+            new_wage = prev_wage * (1 + increase_rate)
+            minimum_wage.append(new_wage)
+
+        if t == 0:
+            unemployment_benefit = [15]
+        else:
+            prev_ub = unemployment_benefit[t - 1]
+            ub_increase_rate = 0.02 if TransitionActive[t - 1] == 1 else 0.0
+            new_ub = prev_ub * (1 + ub_increase_rate)
+            unemployment_benefit.append(new_ub)
+
+
+        # --- BOUCLE MÉNAGES ---
+        for h, household in enumerate(household_list):
+            status_prev = household["Status"]
+            skill = household["SkillStatus"]
+            employer_id = household["IdEmployer"]
+            reskilling_counter = household.get("ReskillingCounter", 0)
+
+            transition_active = 1
+            brown_retention = 0.8
+            green_retention = 0.85
+            brown_qualified_retention = 0.9
+            green_qualified_retention = 0.92
+
+            # Si en reskilling
+            if status_prev == 4:
+                reskilling_counter += 1
+                if reskilling_counter >= 2:
+                    household["Status"] = 3
+                    household["IdEmployer"] = -1
+                    reskilling_counter = 0
+                household["ReskillingCounter"] = reskilling_counter
+                continue
+
+            # Emploi garanti
+            if status_prev == 3 and transition_active == 1:
+                household["Status"] = 3
+                household["IdEmployer"] = -1
+                continue
+
+            # Licenciements
+            if status_prev in [1, 2, 5, 6] and employer_id != -1:
+                firm = firm_list[employer_id]
+                rnd = random.random()
+
+                if status_prev == 1 and rnd > brown_retention:
+                    household["Status"] = 3
+                    household["IdEmployer"] = -1
+                    continue
+                elif status_prev == 2 and rnd > green_retention:
+                    household["Status"] = 3
+                    household["IdEmployer"] = -1
+                    continue
+                elif status_prev == 5 and rnd > brown_qualified_retention:
+                    household["Status"] = 3
+                    household["IdEmployer"] = -1
+                    continue
+                elif status_prev == 6 and rnd > green_qualified_retention:
+                    household["Status"] = 3
+                    household["IdEmployer"] = -1
+                    continue
+
+            # Embauche
+            if household["Status"] == 3:
+                hired = False
+                random.shuffle(firm_list)
+                for firm in firm_list:
+                    if skill == 0 and random.random() < 0.05:
+                        household["Status"] = 1 if random.random() < 0.5 else 2
+                        household["IdEmployer"] = firm["FirmID"]
+                        hired = True
+                        break
+                    elif skill == 1 and random.random() < 0.05:
+                        household["Status"] = 4 if random.random() < 0.5 else 6
+                        household["IdEmployer"] = firm["FirmID"]
+                        hired = True
+                        break
+                if not hired:
+                    household["IdEmployer"] = -1
+
+                    # --- Décision de prendre un emploi garanti par l'État ---
+            if household["Status"] == 3 and TransitionActive[t] == 1:
+                unemployment_benefit_t = unemployment_benefit[t]
+                min_wage_t = minimum_wage[t]
+                distance = household["DistanceToJob"]
+
+                net_gain = min_wage_t - unemployment_benefit_t - distance
+
+                if net_gain > 0:
+                    household["Status"] = 3  # Emploi garanti accepté (même statut 3)
+        
+
+        # --- BOUCLE BANQUES ---
+        for bank in bank_list:
+            bank["TargetLeverage"].append(random.uniform(0.01, 0.1))
+            bank["BanksAnimalSpirits"].append(random.uniform(0.5, 1.5))
+            bank["RiskAppetite"].append(random.uniform(0.01, 0.9))
+            bank["MarketShareBank"].append(random.uniform(0.05, 0.1))
+
+        # --- BOUCLE FIRMES ---
+        for firm in firm_list:
+            # Initialisation des constantes ou paramètres dynamiques
+            for key, value in {
+                "LoanInterestRate": random.uniform(0.01, 0.05),
+                "GreenLoanInterestRate": random.uniform(0.01, 0.05),
+                "AnimalSpirits_B": random.uniform(0, 0.02),
+                "AnimalSpirits_V": random.uniform(0, 0.02),
+                "gamma1": 0.01,
+                "gamma2": 0.01,
+                "gamma3": 0.01,
+                "gamma4": 0.01
+            }.items():
+                if key not in firm:
+                    firm[key] = []
+                firm[key].append(value)
+
+            if t == 0:
+                # Initialisation sécurisée des listes pour t = 0
+                for key in [
+                    "BaseWage", "LowSkilledBrownWage", "LowSkilledGreenWage",
+                    "HighSkilledBrownWage", "HighSkilledGreenWage",
+                    "BrownInvestment", "GreenInvestment", "BrownInvDes", "GreenInvDes",
+                    "BrownLoansDem", "GreenLoansDem", "BrownLoansVar", "GreenLoansVar",
+                    "CreditConstraintVar", "CreditConstraintInt",
+                    "TotalCapital", "GreenCapitalRatio", "ratiocashflow", "LeverageFirm",
+                    "FullCapacityProduction", "Investment", "Loans",
+                    "GreenInvestmentShare", "BrownInvestmentShare"
+                ]:
+                    firm[key] = [0]
+
+                # Assurer que TotalDebt existe à t = 0
+                if "TotalDebt" not in firm:
+                    firm["TotalDebt"] = [0]
+
+                # Initialisation des prêts (divisé en deux)
+                firm["BrownLoans"] = [firm["TotalDebt"][0] / 2]
+                firm["GreenLoans"] = [firm["TotalDebt"][0] / 2]
+
+                # Initialisation dépendant du capital
+                total_capital = firm["BrownCapital"][0] + firm["GreenCapital"][0]
+                firm["TotalCapital"][0] = total_capital
+                firm["GreenCapitalRatio"][0] = (
+                    firm["GreenCapital"][0] / total_capital if total_capital > 0 else 0
+                )
+                firm["FullCapacityProduction"][0] = 0.8 * total_capital
+            else:
+                base = base_wage * firm.get("ProductivityFactor", 1.0)
+                firm["BaseWage"].append(base)
+                firm["LowSkilledBrownWage"].append(base)
+                firm["LowSkilledGreenWage"].append(base * (1 + green_premium))
+                firm["HighSkilledBrownWage"].append(base * (1 + skill_premium))
+                firm["HighSkilledGreenWage"].append(base * (1 + green_skill_premium))
+
+                 # Calcul du salaire de base
+                base = base_wage * firm.get("ProductivityFactor", 1.0)
+               
+
+                # Salaires brun et vert peu qualifiés
+                firm["LowSkilledBrownWage"] = firm.get("LowSkilledBrownWage", []) + [base]
+                firm["LowSkilledGreenWage"] = firm.get("LowSkilledGreenWage", []) + [base * (1 + green_premium)]
+
+                # Salaires brun et vert qualifiés
+                firm["HighSkilledBrownWage"] = firm.get("HighSkilledBrownWage", []) + [base * (1 + skill_premium)]
+                firm["HighSkilledGreenWage"] = firm.get("HighSkilledGreenWage", []) + [base * (1 + green_skill_premium)]
+            
+                prev_capital = firm["TotalCapital"][t - 1] if len(firm["TotalCapital"]) > t - 1 else 1
+                prev_profits = firm["Profits"][0]  # Profits are constant in this version
+                prev_debt = firm["TotalDebt"][t - 1] if len(firm["TotalDebt"]) > t - 1 else 100
+                firm["ratiocashflow"].append(prev_profits / prev_capital if prev_capital > 0 else 0)
+                firm["LeverageFirm"].append(prev_debt / prev_capital if prev_capital > 0 else 0)
+                firm["FullCapacityProduction"].append(0.8 * prev_capital)
+
+                growth_b = max(0, firm["AnimalSpirits_B"][t] + firm["gamma1"][t] * firm["ratiocashflow"][t] -
+                                  firm["gamma2"][t] * firm["LeverageFirm"][t] + firm["gamma3"][t] * 0.7 -
+                                  firm["gamma4"][t] * firm["LoanInterestRate"][t - 1])
+                growth_v = max(0, firm["AnimalSpirits_V"][t] + firm["gamma1"][t] * firm["ratiocashflow"][t] -
+                                  firm["gamma2"][t] * firm["LeverageFirm"][t] + firm["gamma3"][t] * 0.7 -
+                                  firm["gamma4"][t] * firm["GreenLoanInterestRate"][t - 1])
+
+                firm["GrKdB"].append(growth_b)
+                firm["GrKdV"].append(growth_v)
+                firm["BrownInvDes"].append(growth_b * firm["BrownCapital"][t - 1])
+                firm["GreenInvDes"].append(growth_v * firm["GreenCapital"][t - 1])
+                firm["BrownLoansDem"].append(firm["BrownInvDes"][t])
+                firm["GreenLoansDem"].append(firm["GreenInvDes"][t])
+
+                bank = bank_list[firm["IdBank"]]
+                target_leverage = bank["TargetLeverage"][t]
+                bank_spirits = bank["BanksAnimalSpirits"][t]
+
+                ccv = bank_spirits * (firm["LeverageFirm"][t - 1] - target_leverage)
+                cci = bank_spirits * (firm["LeverageFirm"][t - 1] - target_leverage)
+                firm["CreditConstraintVar"].append(min(1, max(0, ccv)))
+                firm["CreditConstraintInt"].append(min(1, max(0, cci)))
+
+                cb_rate = central_bank_rate[t]
+                market_share = bank["MarketShareBank"][t]
+                markup = 0.02 * market_share
+
+                firm["LoanInterestRate"][t] = cb_rate + markup + firm["CreditConstraintInt"][t] * 0.02
+                firm["GreenLoanInterestRate"][t] = firm["LoanInterestRate"][t] - 0.01
+
+                firm["BrownLoansVar"].append(firm["BrownInvDes"][t] * (1 - firm["CreditConstraintVar"][t]))
+                firm["GreenLoansVar"].append(firm["GreenInvDes"][t] * (1 - firm["CreditConstraintVar"][t]))
+                firm["BrownInvestment"].append(firm["BrownLoansVar"][t])
+                green_inv = firm["GreenLoansVar"][t]
+                firm["GreenInvestment"].append(green_inv)
+                firm["BrownCapital"].append(firm["BrownCapital"][t - 1] + firm["BrownInvestment"][t])
+                firm["GreenCapital"].append(firm["GreenCapital"][t - 1] + firm["GreenInvestment"][t])
+                firm["BrownLoans"].append(firm["BrownLoans"][t - 1] + firm["BrownLoansVar"][t])
+                firm["GreenLoans"].append(firm["GreenLoans"][t - 1] + firm["GreenLoansVar"][t])
+                total_capital = firm["BrownCapital"][t] + firm["GreenCapital"][t]
+                firm["TotalCapital"].append(total_capital)
+                firm["TotalDebt"].append(firm["BrownLoans"][t] + firm["GreenLoans"][t])
+                firm["GreenCapitalRatio"].append(firm["GreenCapital"][t] / total_capital if total_capital > 0 else 0)
+
+           # À LA FIN DE CHAQUE FIRM, on peut calculer :
+            bank = bank_list[firm["IdBank"]]
+#            if t < len(firm["BrownCapital"]):
+            all_results.append({
+                "Simulation": sim,
+                "Period": t,
+                "FirmID": firm["FirmID"],
+                "BrownCapital": firm["BrownCapital"][t],
+                "GreenCapital": firm["GreenCapital"][t],
+                "CreditConstraintVar": firm["CreditConstraintVar"][t],
+                "TotalCapital": firm["TotalCapital"][t],
+                "GreenCapitalRatio": firm["GreenCapitalRatio"][t],
+                "Failures": bank["Failures"][0],
+                "RiskAppetite": bank["RiskAppetite"][t],
+                "TargetLeverage": bank["TargetLeverage"][t],
+                "BanksAnimalSpirits": bank["BanksAnimalSpirits"][t],
+            })
+
+
+        # Moyenne du revenu disponible pour les ménages à t-1
+        if t > 0:
+            total_disp = sum(h["DisposableIncome"][t - 1] for h in household_list)
+            mean_disp_income = total_disp / len(household_list)
+        else:
+            mean_disp_income = 1.0  # éviter division par zéro
+
+
+        for household in household_list:
+            if t == 0:
+                household["DisposableIncome"].append(0)
+                household["FinancialIncome"].append(0)
+                household["TaxesInd"].append(0)
+                household["HouseholdDebtService"].append(0)
+                household["HouseholdNewDebt"].append(0)
+                household["BaseConsumption"].append(0)
+                household["Consumption"].append(0)
+                household["Savings"].append(household["Savings"][0])
+                household["BaseConsumption"] = []
+                household["SuppCons"] = []
+                household["ConsAg"] = []
+                household["ConsEner"] = []
+                household["ConsHous"] = []
+                household["ConsTrans"] = []
+                household["SuppConsAg"] = []
+                household["SuppConsEner"] = []
+                household["SuppConsHous"] = []
+                household["SuppConsTrans"] = []
+                household["SuppConsInd"] = []
+                household["SuppConsTC"] = []
+                continue
+
+            status = household["Status"]
+            employer_id = household["IdEmployer"]
+            savings_lag = household["Savings"][t - 1]
+            debt_lag = household["HouseholdTotalDebt"][t - 1]
+            income_lag = household["Income"][t - 1]
+
+            if status in [0, 4]:
+                income = unemployment_benefit[t]
+            elif status == 3:
+                income = minimum_wage[t]
+            else:
+                firm = next((f for f in firm_list if f["FirmID"] == employer_id), None)
+                if firm is not None:
+                    if status == 1:
+                        income = firm["LowSkilledBrownWage"][t]
+                    elif status == 2:
+                        income = firm["LowSkilledGreenWage"][t]
+                    elif status == 5:
+                        income = firm["HighSkilledBrownWage"][t]
+                    elif status == 6:
+                        income = firm["HighSkilledGreenWage"][t]
+                    else:
+                        income = 0
+                else:
+                    income = 0
+
+            household["Income"].append(income)
+
+            deposit_rate = household["DepositInterestRate"][0]
+            financial_income = deposit_rate * savings_lag
+            household["FinancialIncome"].append(financial_income)
+
+            taxes = household["TaxRate"][0] * income_lag
+            household["TaxesInd"].append(taxes)
+
+            loan_rate = household["LoanRateCons"][0]
+            debt_service = loan_rate * debt_lag
+            household["HouseholdDebtService"].append(debt_service)
+
+            red = household["Red"][0]
+            disp_income = (income + financial_income + red) - (taxes + debt_service)
+            household["DisposableIncome"].append(disp_income)
+
+            base_c = 10
+            household["BaseConsumption"].append(base_c)
+
+            ptc_di = household["PropensityToConsumeDI"][0]
+            ptc_s = household["PropensityToConsumeSavings"][0]
+            available = disp_income + savings_lag
+
+            if available >= base_c:
+                additional = base_c + ptc_di * (disp_income - base_c) + ptc_s * savings_lag
+                consumption = min(additional, available)
+                household["HouseholdNewDebt"].append(0)
+            else:
+                consumption = base_c
+                debt_needed = base_c - available
+                household["HouseholdNewDebt"].append(debt_needed)
+
+            household["Consumption"].append(consumption)
+
+            new_debt = household["HouseholdNewDebt"][t]
+            total_debt = debt_lag + new_debt
+            household["HouseholdTotalDebt"].append(total_debt)
+
+            saving = savings_lag + (disp_income - consumption + new_debt)
+            household["Savings"].append(max(0, saving))
+
+            # Calcul du GrNeedsIndex et mise à jour du NeedsIndex
+            hum0 = 0.01
+            hum1 = 0.01
+
+            disp_income_lag = household["DisposableIncome"][t - 1] if t > 0 else 1.0
+            base_c_lag = household["BaseConsumption"][t - 1] if t > 0 else 1.0
+            needs_index_lag = household["NeedsIndex"][t - 1] if t > 0 else 100.0
+
+            term1 = hum0 * (1 - base_c_lag / disp_income_lag) if disp_income_lag > 0 else 0
+            term2 = hum1 * (disp_income_lag / mean_disp_income) if mean_disp_income > 0 else 0
+
+            gr_needs_index = term1 + term2
+            household["GrNeedsIndex"].append(gr_needs_index)
+
+            new_needs_index = max(0, needs_index_lag * (1 + gr_needs_index))
+            household["NeedsIndex"].append(new_needs_index)
+
+        # -- Prix sectoriels (utilisent l'inflation)
+        price_ag = price_ag_list[t - 1] * (1 + general_inflation[t]) if t > 0 else 1.0
+        price_ener = price_ener_list[t - 1] * (1 + general_inflation[t]) if t > 0 else 1.0
+        price_hous = price_hous_list[t - 1] * (1 + general_inflation[t]) if t > 0 else 1.0
+        price_trans = price_trans_list[t - 1] * (1 + general_inflation[t]) if t > 0 else 1.0
+
+        price_ag_list.append(price_ag)
+        price_ener_list.append(price_ener)
+        price_hous_list.append(price_hous)
+        price_trans_list.append(price_trans)
+
+        # -- Boucle sur chaque ménage
+        for household in household_list:
+            if t == 0:
+                
+                # Initialisation à t=0
+                household["ConsAg"].append(1.0)
+                household["ConsEner"].append(1.0)
+                household["ConsHous"].append(1.0)
+                household["ConsTrans"].append(1.0)
+                household["BaseConsumption"].append(4.0)
+                household["SuppCons"].append(0.0)
+                for key in ["SuppConsAg", "SuppConsEner", "SuppConsHous", "SuppConsTrans", "SuppConsInd", "SuppConsTC"]:
+                    household[key].append(0.0)
+                continue
+
+            # --- Base consumption per category
+            cons_ag = household["ConsAg"][t - 1] * (1 + (price_ag - price_ag_list[t - 1]))
+            cons_ener = household["ConsEner"][t - 1] * (1 + (price_ener - price_ener_list[t - 1]))
+            cons_hous = household["ConsHous"][t - 1] * (1 + (price_hous - price_hous_list[t - 1]))
+            cons_trans = household["ConsTrans"][t - 1] * (1 + (price_trans - price_trans_list[t - 1]))
+
+            household["ConsAg"].append(cons_ag)
+            household["ConsEner"].append(cons_ener)
+            household["ConsHous"].append(cons_hous)
+            household["ConsTrans"].append(cons_trans)
+
+            base_c = cons_ag + cons_ener + cons_hous + cons_trans
+            household["BaseConsumption"].append(base_c)
+
+            total_cons = household["Consumption"][t]
+            supp_cons = total_cons - base_c
+            household["SuppCons"].append(supp_cons)
+
+            # --- Supp consumption by category
+            household["SuppConsAg"].append(household["AgPref"] * supp_cons)
+            household["SuppConsEner"].append(household["EnerPref"] * supp_cons)
+            household["SuppConsHous"].append(household["HousPref"] * supp_cons)
+            household["SuppConsTrans"].append(household["TransPref"] * supp_cons)
+            household["SuppConsInd"].append(household["IndPref"] * supp_cons)
+            household["SuppConsTC"].append(household["TCPref"] * supp_cons)
+            # Mise à jour fictive du vote pour permettre le calcul de l’effet bandwagon
+            # (À remplacer plus tard par une vraie règle comportementale)
+            prev_vote = household["VoteDecision"][-1]
+            # --- DÉCISION DE VOTE ---
+
+            needs_index = household["NeedsIndex"][t]
+            needs_index_prev = household["NeedsIndex"][t - 1]
+            vote_prev = household["VoteDecision"][t - 1]
+            bandwagon_prev = bandwagon_effect[t - 1]
+
+            # Pondérations
+            w_needs = 0.2
+            w_bandwagon = 0.2
+            w_inertia = 0.2
+
+            # Calcul de la probabilité de voter pro-transition
+            vote_prob = (
+                w_needs * (needs_index - needs_index_prev) +
+                w_bandwagon * bandwagon_prev +
+                w_inertia * vote_prev
+            )
+
+            # Clamping entre 0 et 1
+            vote_prob = max(0, min(1, vote_prob))
+
+            # Décision finale
+            new_vote = 1 if random.random() < vote_prob else 0
+            household["VoteDecision"].append(new_vote)
+
+            # --- MISE À JOUR DE TransitionActive ---
+        if t == 0:
+            TransitionActive.append(0)
+        elif t in [5, 10, 15, 20, num_periods - 1]:
+            nb_pro = sum(1 for h in household_list if h["VoteDecision"][t] == 1)
+            majority_threshold = num_households // 2
+            if nb_pro > majority_threshold:
+                TransitionActive.append(1)
+            else:
+                TransitionActive.append(0)
+        else:
+            TransitionActive.append(TransitionActive[t - 1])
+
+
+household_records = []
+for h_id, h in enumerate(household_list):
+    for t in range(1, num_periods):
+        household_records.append({
+            "HouseholdID": h_id,
+            "Period": t,
+            "Income": h["Income"][t],
+            "DisposableIncome": h["DisposableIncome"][t],
+            "BaseConsumption": h["BaseConsumption"][t],
+            "Consumption": h["Consumption"][t],
+            "Savings": h["Savings"][t],
+            "Debt": h["HouseholdTotalDebt"][t]
+        })
+
+household_df = pd.DataFrame(household_records)
+
+# Création d'un DataFrame pour VoteDecision
+vote_records = []
+for h_id, h in enumerate(household_list):
+    for t in range(1, num_periods):
+        vote_records.append({
+            "HouseholdID": h_id,
+            "Period": t,
+            "VoteDecision": h["VoteDecision"][t]
+        })
+
+vote_df = pd.DataFrame(vote_records)
+
+# Construction d'un DataFrame pour suivre l'évolution du NeedsIndex
+needsindex_records = []
+for h_id, h in enumerate(household_list):
+    for t in range(1, num_periods):
+        needsindex_records.append({
+            "HouseholdID": h_id,
+            "Period": t,
+            "NeedsIndex": h["NeedsIndex"][t]
+        })
+
+needsindex_df = pd.DataFrame(needsindex_records)
+
+# Évolution agrégée des votes pro-transition
+plt.figure(figsize=(10, 5))
+vote_share = vote_df.groupby("Period")["VoteDecision"].mean()
+plt.plot(vote_share.index, vote_share.values, marker="o")
+plt.title("Part des votes pro-transition (VoteDecision = 1) dans la population")
+plt.xlabel("Période")
+plt.ylabel("Part de votes pro-transition")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# Heatmap du vote individuel par ménage
+pivot_votes = vote_df.pivot(index="HouseholdID", columns="Period", values="VoteDecision")
+
+plt.figure(figsize=(14, 10))
+sns.heatmap(
+    pivot_votes,
+    cmap=sns.color_palette(["#d7191c", "#1a9641"], as_cmap=True),  # rouge = anti, vert = pro
+    cbar_kws={'label': 'VoteDecision'},
+    linewidths=0.1,
+    linecolor='grey'
+)
+plt.title("Heatmap du vote pro-transition par ménage (0 = anti, 1 = pro)")
+plt.xlabel("Période")
+plt.ylabel("Ménage")
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(12, 8))
+for h_id in pivot_votes.index:
+    periods_voted = pivot_votes.columns[pivot_votes.loc[h_id] == 1]
+    plt.scatter(periods_voted, [h_id] * len(periods_voted), color="green", s=10, alpha=0.7)
+
+plt.title("Votes pro-transition (1) par ménage et période")
+plt.xlabel("Période")
+plt.ylabel("ID Ménage")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+vote_prop = vote_df.groupby(["Period", "VoteDecision"]).size().unstack(fill_value=0)
+vote_prop = vote_prop[[1, 0]]  # Met le pro-transition en premier
+vote_prop_norm = vote_prop.div(vote_prop.sum(axis=1), axis=0)
+
+vote_prop_norm.plot.area(figsize=(10, 6), color=["green", "red"])
+plt.title("Évolution de la répartition des votes (pro vs anti-transition)")
+plt.xlabel("Période")
+plt.ylabel("Proportion")
+plt.legend(["Pro-transition (1)", "Anti-transition (0)"])
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+
+
+plt.figure(figsize=(14, 7))
+
+for h_id in needsindex_df["HouseholdID"].unique():
+    household_data = needsindex_df[needsindex_df["HouseholdID"] == h_id]
+    plt.plot(household_data["Period"], household_data["NeedsIndex"], alpha=0.3)
+
+plt.title("Évolution du NeedsIndex par ménage (Simulation 0)")
+plt.xlabel("Période")
+plt.ylabel("NeedsIndex")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+
+# Fin du chronomètre
+execution_time = time.time() - start_time
+print(f"Temps d'exécution du modèle : {execution_time:.2f} secondes")
+
+print(f"Taille de all_results : {len(all_results)}")
+# Affichage des résultats
+results_df = pd.DataFrame(all_results)
+
+# Vérifie combien de firmes sont présentes à chaque période
+firmes_par_periode = results_df.groupby("Period")["FirmID"].nunique()
+
+# Affiche un tableau de diagnostic
+print("\nDiagnostic du nombre de firmes par période :")
+for period, count in firmes_par_periode.items():
+    print(f"Période {period} : {count} firmes uniques")
+
+# Affichage de 5 firmes aléatoires sur la dernière période
+last_period_df = results_df[results_df["Period"] == num_periods - 1]
+
+if len(last_period_df) >= 5:
+    sample_firms = last_period_df.sample(5, random_state=1)
+    print("\nExtrait de 5 firmes (période finale) :")
+    print(sample_firms)
+else:
+    print("\n⚠️ Pas assez de firmes pour échantillonner 5 observations à la période finale.")
+    print(f"Nombre de firmes disponibles à la période {num_periods - 1} :", len(last_period_df))
+    sample_firms = pd.DataFrame()  # Valeur vide pour éviter les erreurs plus loin
+
+print("\nExtrait de 5 firmes (période finale) :")
+print(sample_firms)
+
+print("Nombre unique de firmes dans results_df :", results_df["FirmID"].nunique())
+print("Liste des firmes manquantes :", set(range(num_firms)) - set(results_df["FirmID"].unique()))
+
+plt.figure(figsize=(14, 7))
+
+plt.figure(figsize=(14, 7))
+
+for h, household in enumerate(household_list):
+    if "BaseConsumption" in household and "DisposableIncome" in household:
+        base = household["BaseConsumption"]
+        dispo = household["DisposableIncome"]
+        share = [b / d if d > 0.01 else np.nan for b, d in zip(base, dispo)]
+        share = [s if s < 2 else np.nan for s in share]  # filtrage des valeurs aberrantes
+        plt.plot(range(len(share)), share, alpha=0.3)
+
+plt.xlabel("Périodes")
+plt.ylabel("BaseConsumption / DisposableIncome")
+plt.title("Part de la base consumption dans le revenu disponible par ménage")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+
+# Évolution du capital brun pour 5 firmes aléatoires
+firm_ids = results_df["FirmID"].drop_duplicates().sample(5, random_state=1).tolist()
+subset_df = results_df[(results_df["FirmID"].isin(firm_ids)) & (results_df["Simulation"] == 0)]
+
+plt.figure(figsize=(12, 6))
+sns.lineplot(data=subset_df, x="Period", y="BrownCapital", hue="FirmID", legend=True)
+plt.title("Évolution du capital brun pour 5 firmes | Simulation 1")
+plt.xlabel("Période")
+plt.ylabel("BrownCapital")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# Évolution du capital vert pour les mêmes firmes
+plt.figure(figsize=(12, 6))
+sns.lineplot(data=subset_df, x="Period", y="GreenCapital", hue="FirmID", legend=True)
+plt.title("Évolution du capital vert pour 5 firmes | Simulation 1")
+plt.xlabel("Période")
+plt.ylabel("GreenCapital")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# Boxplot du capital total à 5 périodes sélectionnées
+plt.figure(figsize=(10, 6))
+selected_periods = [2, 5, 9, 15, 24]
+sns.boxplot(x="Period", y="TotalCapital", data=results_df[results_df["Period"].isin(selected_periods)])
+plt.title("Distribution du capital total à différentes périodes")
+plt.xlabel("Période")
+plt.ylabel("TotalCapital")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# Évolution de la contrainte de crédit pour les 120 firmes
+plt.figure(figsize=(14, 8))
+sns.lineplot(
+    data=results_df[results_df["Simulation"] == 0],
+    x="Period",
+    y="CreditConstraintVar",
+    hue="FirmID",
+    legend=False,
+    alpha=0.5
+)
+plt.title("Évolution de la contrainte de crédit pour les 120 firmes | Simulation 1")
+plt.xlabel("Période")
+plt.ylabel("CreditConstraintVar")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# 1. Revenu moyen des ménages
+plt.figure(figsize=(10, 5))
+sns.lineplot(data=household_df, x="Period", y="Income", estimator="mean", ci="sd")
+plt.title("Revenu moyen des ménages (Simulation 0)")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# 2. Consommation moyenne
+plt.figure(figsize=(10, 5))
+sns.lineplot(data=household_df, x="Period", y="Consumption", estimator="mean", ci="sd")
+plt.title("Consommation moyenne des ménages (Simulation 0)")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# 3. Dette moyenne
+plt.figure(figsize=(10, 5))
+sns.lineplot(data=household_df, x="Period", y="Debt", estimator="mean", ci="sd")
+plt.title("Dette moyenne des ménages (Simulation 0)")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
