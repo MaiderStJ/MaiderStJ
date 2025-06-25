@@ -4,6 +4,7 @@ import random
 import time
 import matplotlib.pyplot as plt
 import seaborn as sns
+import math
 
 # Début du chronomètre
 start_time = time.time()
@@ -15,11 +16,70 @@ num_banks = 10
 num_households = 600
 num_centralbank = 1
 num_periods = 25
-num_simulations = 1
+num_simulations = 5
 
 # Initialisation structurelle des 600 ménages
 random.seed(42)
 np.random.seed(42)
+
+# === Bloc 1 : Initialisation des paramètres biophysiques ===
+
+params = {
+    # Coefficients de cycle du carbone
+    "phi_11": 0.6,
+    "phi_21": 0.25,
+    "phi_12": 0.35,
+    "phi_22": 0.45,
+    "phi_32": 0.1,
+    "phi_23": 0.15,
+    "phi_33": 0.7,
+    
+    # Forçage radiatif
+    "RF_2CO2": 3.7,
+    
+    # Concentration CO2 pré-industrielle (ppm)
+    "AtmosphericPreIndustrialCO2Concentration": 280,
+    
+    # Sensibilité climatique (°C)
+    "CS": 3.0,
+    
+    # Coefficients temps (discrétisation température)
+    "t_1": 0.2,
+    "t_2": 0.1,
+    "t_3": 0.05,
+    
+    # Coefficients fonction dommages climatiques
+    "eta_1": 0.01,
+    "eta_2": 0.005,
+    "eta_3": 0.0001,
+    
+    # Emissions industrielles : part énergie non renouvelable
+    "emissions_share": 0.8,
+    
+    # Changement d'usage des sols (taux de déclin émissions terres)
+    "land_use_change": 0.01,
+
+    "epsilon_V": 0.1,  # Exemple valeur : intensité énergétique faible pour capital vert
+    "epsilon_B": 0.3,  # Exemple valeur : intensité énergétique plus élevée pour capital brun
+}
+
+# Initialisation des variables biophysiques sur toute la durée des périodes
+# (à adapter au nombre total de périodes de ta simulation)
+num_periods = 25  # ou récupère la valeur réelle de ton modèle
+
+nature = {
+    "AtmosphericCO2Concentration": [params["AtmosphericPreIndustrialCO2Concentration"]] * num_periods,
+    "BiosphereCO2Concentration": [150] * num_periods,  # estimation initiale
+    "LowerOceansCO2Concentration": [90] * num_periods,  # estimation initiale
+    "IndustrialEmissions": [0.0] * num_periods,
+    "LandUseEmissions": [0.0] * num_periods,
+    "TotalEmissions": [0.0] * num_periods,
+    "AtmosphericTemperature": [14.0] * num_periods,  # °C absolue ou anomaly selon ton modèle
+    "LowerOceansTemperature": [3.0] * num_periods,
+    "RadiativeForcing": [0.0] * num_periods,
+    "DamagesFunction": [0.0] * num_periods,
+}
+
 
     # Part de consommation normalisée par secteur pour les territoires ruraux
 rural_prefs = {
@@ -127,12 +187,138 @@ status_share_records = []
 policy_outcomes = []
 policy_records = []
 household_records = []
-
-
-
-
+vote_records = []
 
 is_carbon_tax_scenario = False
+
+def compute_firm_energy_intensity(firm, t, epsilon_V, epsilon_B):
+    green_cap = firm["GreenCapital"][t] if t < len(firm["GreenCapital"]) else 0
+    brown_cap = firm["BrownCapital"][t] if t < len(firm["BrownCapital"]) else 0
+    total_cap = green_cap + brown_cap
+    green_ratio = green_cap / total_cap if total_cap > 0 else 0
+    intensity = green_ratio * epsilon_V + (1 - green_ratio) * epsilon_B
+    return intensity
+
+def update_biophys_vars(nature, firms, t, params):
+    import math
+
+    # Récupération des valeurs historiques
+    CO2_prev = nature["AtmosphericCO2Concentration"][t-1] if t > 0 else nature["AtmosphericCO2Concentration"][0]
+    Biosphere_CO2_prev = nature["BiosphereCO2Concentration"][t-1] if t > 0 else nature["BiosphereCO2Concentration"][0]
+    LowerOceans_CO2_prev = nature["LowerOceansCO2Concentration"][t-1] if t > 0 else nature["LowerOceansCO2Concentration"][0]
+    Temp_Atmos_prev = nature["AtmosphericTemperature"][t-1] if t > 0 else nature["AtmosphericTemperature"][0]
+    Temp_Oceans_prev = nature["LowerOceansTemperature"][t-1] if t > 0 else nature["LowerOceansTemperature"][0]
+
+    # Calcul des émissions industrielles cumulées sur les firmes
+    industrial_emissions = 0
+    for firm in firms:
+        # Calcul microéconomique de l'intensité énergétique
+        green_cap = firm["GreenCapital"][t] if t < len(firm["GreenCapital"]) else 0
+        brown_cap = firm["BrownCapital"][t] if t < len(firm["BrownCapital"]) else 0
+        total_cap = green_cap + brown_cap
+        green_ratio = green_cap / total_cap if total_cap > 0 else 0
+
+        epsilon_V = params["epsilon_V"]
+        epsilon_B = params["epsilon_B"]
+        energy_intensity = green_ratio * epsilon_V + (1 - green_ratio) * epsilon_B
+
+        production = firm["Production"][t] if t < len(firm["Production"]) else 0
+        energy_needed = energy_intensity * production
+
+        renewable_share = 1 / (1 + 1/(0.54 * green_ratio)) if green_ratio > 0 else 0
+        renewable_energy = renewable_share * energy_needed
+        non_renewable_energy = energy_needed - renewable_energy
+
+        emissions_share = params["emissions_share"]
+        industrial_emissions += emissions_share * non_renewable_energy
+
+    nature["IndustrialEmissions"][t] = industrial_emissions
+
+    # Emissions liées à l'usage des sols
+    land_use_change = params.get("land_use_change", 0.01)
+    if t == 0:
+        nature["LandUseEmissions"][t] = 0
+    else:
+        nature["LandUseEmissions"][t] = nature["LandUseEmissions"][t-1] * (1 - land_use_change)
+
+    # Total emissions
+    nature["TotalEmissions"][t] = nature["IndustrialEmissions"][t] + nature["LandUseEmissions"][t]
+
+    # Concentrations CO2 atmosphérique et autres réservoirs
+    phi_11 = params["phi_11"]
+    phi_21 = params["phi_21"]
+    phi_12 = params["phi_12"]
+    phi_22 = params["phi_22"]
+    phi_32 = params["phi_32"]
+    phi_23 = params["phi_23"]
+    phi_33 = params["phi_33"]
+
+    nature["AtmosphericCO2Concentration"][t] = nature["TotalEmissions"][t] + phi_11 * CO2_prev + phi_21 * Biosphere_CO2_prev
+    nature["BiosphereCO2Concentration"][t] = phi_12 * CO2_prev + phi_22 * Biosphere_CO2_prev + phi_32 * LowerOceans_CO2_prev
+    nature["LowerOceansCO2Concentration"][t] = phi_23 * Biosphere_CO2_prev + phi_33 * LowerOceans_CO2_prev
+
+    # Radiative forcing
+    RF_2CO2 = params["RF_2CO2"]
+    CO2_preindustrial = params["AtmosphericPreIndustrialCO2Concentration"]
+    ratio = nature["AtmosphericCO2Concentration"][t] / CO2_preindustrial if CO2_preindustrial > 0 else 1
+    if ratio > 0:
+        radiative_forcing = math.log(RF_2CO2 * ratio) / math.log(2)
+    else:
+        radiative_forcing = 0
+    nature["RadiativeForcing"] = radiative_forcing
+
+    # Température atmosphérique
+    CS = params["CS"]
+    t_1 = params["t_1"]
+    t_2 = params["t_2"]
+    RF = radiative_forcing
+    part = RF - (RF_2CO2 / CS)
+    temp_inter = part * Temp_Atmos_prev - t_2 * (Temp_Atmos_prev - Temp_Oceans_prev)
+    nature["AtmosphericTemperature"][t] = t_1 * temp_inter
+
+    # Température océans profonds
+    t_3 = params["t_3"]
+    nature["LowerOceansTemperature"][t] = Temp_Oceans_prev + t_3 * (Temp_Atmos_prev - Temp_Oceans_prev)
+
+    # Fonction dommages climatiques
+    eta_1 = params["eta_1"]
+    eta_2 = params["eta_2"]
+    eta_3 = params["eta_3"]
+    T_at = nature["AtmosphericTemperature"][t]
+    damages = eta_1 * T_at + eta_2 * (T_at ** 2) + eta_3 * (T_at ** 6.754)
+    nature["DamagesFunction"][t] = 1 - 1 / (1 + damages)
+
+def plot_climate_variables(nature, num_periods, scenario_name):
+    # Préparer un DataFrame pour seaborn
+    data = {
+        "Period": list(range(num_periods)),
+        "AtmosphericTemperature": nature["AtmosphericTemperature"][:num_periods],
+        "LowerOceansTemperature": nature["LowerOceansTemperature"][:num_periods],
+        "AtmosphericCO2Concentration": nature["AtmosphericCO2Concentration"][:num_periods],
+        "TotalEmissions": nature["TotalEmissions"][:num_periods],
+    }
+    df = pd.DataFrame(data)
+    df = df.melt(id_vars="Period", var_name="Variable", value_name="Value")
+
+    plt.figure(figsize=(12, 6))
+    sns.lineplot(data=df, x="Period", y="Value", hue="Variable")
+    plt.title(f"Évolution climatique dans le scénario {scenario_name}")
+    plt.xlabel("Période")
+    plt.ylabel("Valeurs")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+def gini_coefficient(x):
+    import numpy as np
+    sorted_x = np.sort(np.array(x))
+    n = len(x)
+    cumx = np.cumsum(sorted_x)
+    sum_x = cumx[-1]
+    if sum_x == 0:
+        return 0
+    gini = (n + 1 - 2 * np.sum(cumx) / sum_x) / n
+    return gini
 
 def update_policy_activation(t, household_list, policy_list, scenario_triggered):
     if t == 0:
@@ -221,6 +407,7 @@ def compute_firm_revenues_and_profits(t, firm_list, household_list, CarbonTaxAct
 
 
 # Liste pour stocker tous les résultats
+gini_records = []
 all_results = []
 
 # Simulation
@@ -236,7 +423,7 @@ for sim in range(num_simulations):
     transition_policy_active = False
     post_growth_policy_active = False
 
-    if scenario_name == "carbon_tax_only":
+    if scenario_name in ["carbon_tax_only", "transition_mix"]:
         carbon_tax_active = True
     elif scenario_name == "transition_mix":
         transition_policy_active = True
@@ -282,6 +469,7 @@ for sim in range(num_simulations):
             "GreenCapitalRatio": [],
             "IdSector": sectors.index(sectors[i % len(sectors)]) + 1,
             "SelectedChampions": 1 if random.random() < 0.2 else 0,  # 20% des firmes sont champions
+            "Production": [0]*num_periods,
 
         }
         firm_list.append(firm)
@@ -433,6 +621,16 @@ for sim in range(num_simulations):
             green_capital = firm.get("GreenCapital", [0])[t - 1] if t > 0 else 0
             brown_capital = firm.get("BrownCapital", [0])[t - 1] if t > 0 else 0
             total_capital = green_capital + brown_capital
+
+            # Calcul de l'intensité énergétique microéconomique
+            energy_intensity = compute_firm_energy_intensity(firm, t, params["epsilon_V"], params["epsilon_B"])
+    
+            # Production ou consommation adressée à la firme
+            production = firm.get("Production", [0]*num_periods)[t]
+    
+            # Calcul des besoins énergétiques (à utiliser ensuite dans update_biophys_vars)
+            firm["EnergyNeeded"] = energy_intensity * production
+
 
     # Productivité endogène croissante avec le capital vert
             base_productivity = 30
@@ -850,6 +1048,42 @@ for sim in range(num_simulations):
                 carbon_cost_household = carbon_tax_rate * household["DisposableIncome"][t]
                 household["DisposableIncome"][t] = max(0, household["DisposableIncome"][t] - carbon_cost_household)
 
+            # Paramètres de la politique sociale post growth
+            RBU_amount = 4  # Revenu de base universel fixe par ménage et période
+            income_tax_threshold = 30  # Seuil de revenu à partir duquel la taxe s'applique
+            progressive_tax_rate = 0.25  # Taux d'imposition sur la part de revenu > threshold
+
+            if scenario_name == "post_growth":
+                income_t = household["Income"][t]
+
+                # Calcul de la taxe progressive simulée sur hauts revenus
+                taxable_income = max(0, income_t - income_tax_threshold)
+                tax_amount = progressive_tax_rate * taxable_income
+
+                # Revenu disponible avant redistribution
+                dispo_before = household["DisposableIncome"][t]
+
+                # On retire la taxe
+                dispo_after_tax = max(0, dispo_before - tax_amount)
+
+                # Ajout du revenu de base universel
+                dispo_final = dispo_after_tax + RBU_amount
+
+                household["DisposableIncome"][t] = dispo_final
+
+            # Calcul du coefficient de Gini sur le revenu disponible des ménages à la période t
+            disposable_incomes_t = [h["DisposableIncome"][t] for h in household_list]
+            gini_t = gini_coefficient(disposable_incomes_t)
+
+            # Stockage de l’indicateur pour analyses ultérieures
+            gini_records.append({
+                "Simulation": sim,
+                "Period": t,
+                "GiniDisposableIncome": gini_t,
+                "ScenarioName": scenario_name
+            })
+
+
             base_c = 10 
             household["BaseConsumption"].append(base_c)
 
@@ -1077,13 +1311,13 @@ for sim in range(num_simulations):
         # - emploi garanti (Status = 3 sans employeur)
         public_guaranteed_jobs = sum(minimum_wage[t] for h in household_list if h["Status"] == 3 and h["IdEmployer"] == -1)
 
-        compute_firm_revenues_and_profits(t, firm_list, household_list, CarbonTaxActive)
+#        compute_firm_revenues_and_profits(t, firm_list, household_list, CarbonTaxActive)
 
-        total_revenue = sum(
-            f["Revenue"][t] if "Revenue" in f and len(f["Revenue"]) > t else 0.0
-            for f in firm_list
-        )
-        print(f"[t={t}] Revenus totaux des firmes : {total_revenue:.2f}")
+ #       total_revenue = sum(
+  #          f["Revenue"][t] if "Revenue" in f and len(f["Revenue"]) > t else 0.0
+   #         for f in firm_list
+     #   )
+    #    print(f"[t={t}] Revenus totaux des firmes : {total_revenue:.2f}")
 
         # Dépense publique totale
         total_public_spending = public_green_investment + public_unemployment_benefits + public_guaranteed_jobs
@@ -1099,6 +1333,7 @@ for sim in range(num_simulations):
             "ScenarioName": scenario_name
         })
 
+        update_biophys_vars(nature, firm_list, t, params)
 
 # --- MISE À JOUR DE TransitionActive, CarbonTaxActive, PostGrowthActive ---
         if t == 0:
@@ -1154,7 +1389,6 @@ for sim in range(num_simulations):
         current_scenario = scenario_name
 
 # Création d'un DataFrame pour VoteDecision
-        vote_records = []
         for h_id, h in enumerate(household_list):
             for t in range(1, num_periods):
                 if t < len(h["VoteDecision"]):
@@ -1179,6 +1413,7 @@ for h_id, h in enumerate(household_list):
             "Consumption": h["Consumption"][t],
             "Savings": h["Savings"][t],
             "Debt": h["HouseholdTotalDebt"][t],
+            "VoteDecision": h["VoteDecision"][t],
             "ScenarioName": current_scenario,  #  Ajout
             "Simulation": sim                  #  Ajout
         })
@@ -1203,8 +1438,58 @@ policy_df = pd.DataFrame(policy_outcomes)
 
 vote_df = pd.DataFrame(vote_records)
 
+gini_df = pd.DataFrame(gini_records)
+
+plot_climate_variables(nature, num_periods, scenario_name)
+
+plt.figure(figsize=(10, 6))
+sns.lineplot(data=gini_df, x="Period", y="GiniDisposableIncome", hue="ScenarioName", estimator="mean", ci="sd")
+plt.title("Évolution moyenne du coefficient de Gini du revenu disponible par scénario")
+plt.xlabel("Période")
+plt.ylabel("Coefficient de Gini")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
 max_period = household_df["Period"].max()
 subset = household_df[household_df["Period"] <= max_period]
+
+
+# Calcul de la proportion moyenne et écart-type des votes pro-transition par scénario et période
+vote_share_by_sim = (
+    vote_df.groupby(["ScenarioName", "Simulation", "Period"])["VoteDecision"]
+    .mean()
+    .reset_index()
+)
+
+vote_summary = (
+    vote_share_by_sim
+    .groupby(["ScenarioName", "Period"])["VoteDecision"]
+    .agg(MeanVoteShare="mean", StdDevVoteShare="std")
+    .reset_index()
+)
+
+# Tracé
+plt.figure(figsize=(12, 7))
+for scenario in vote_summary["ScenarioName"].unique():
+    data = vote_summary[vote_summary["ScenarioName"] == scenario]
+    plt.plot(data["Period"], data["MeanVoteShare"], label=scenario.capitalize().replace("_", " "))
+    plt.fill_between(
+        data["Period"],
+        data["MeanVoteShare"] - data["StdDevVoteShare"],
+        data["MeanVoteShare"] + data["StdDevVoteShare"],
+        alpha=0.2
+    )
+
+plt.title("Soutien politique aux trajectoires de transition selon les scénarios")
+plt.xlabel("Période")
+plt.ylabel("Proportion moyenne de votes pro-transition (VoteDecision=1)")
+plt.ylim(0, 1)
+plt.legend(title="Scénarios")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
 
 # Agrégation par période
 revenue_agg = results_df.groupby("Period")["Revenue"].sum().reset_index(name="RevenusFirme")
@@ -1310,6 +1595,15 @@ vote_summary = (
     .reset_index()
 )
 
+results_df["GreenCapitalShare"] = results_df["GreenCapital"] / results_df["TotalCapital"]
+
+# 3. Part du capital vert
+plt.figure(figsize=(10, 6))
+sns.lineplot(data=results_df, x="Period", y="GreenCapitalShare", hue="ScenarioName", estimator="mean", ci="sd")
+plt.title("Part du capital vert dans le capital total")
+plt.tight_layout()
+plt.show()
+
 # Tracé
 plt.figure(figsize=(12, 6))
 for scenario in vote_summary["ScenarioName"].unique():
@@ -1372,7 +1666,7 @@ sns.lineplot(
 plt.title("Nombre de simulations avec politique écologique active (par période et scénario)")
 plt.xlabel("Période")
 plt.ylabel("Nombre de simulations (sur 10)")
-plt.ylim(0, 100)
+plt.ylim(0, 10)
 plt.grid(True, axis="y")
 plt.tight_layout()
 plt.show()
@@ -1486,8 +1780,6 @@ plt.grid(True)
 plt.tight_layout()
 plt.show()
 
-results_df["GreenCapitalShare"] = results_df["GreenCapital"] / results_df["TotalCapital"]
-
 # Style
 sns.set(style="whitegrid")
 
@@ -1574,12 +1866,7 @@ plt.title("Revenu disponible moyen par scénario")
 plt.tight_layout()
 plt.show()
 
-# 3. Part du capital vert
-plt.figure(figsize=(10, 6))
-sns.lineplot(data=results_df, x="Period", y="GreenCapitalShare", hue="ScenarioName", estimator="mean", ci="sd")
-plt.title("Part du capital vert dans le capital total")
-plt.tight_layout()
-plt.show()
+
 
 # 4. Boxplot du capital vert à t=24
 plt.figure(figsize=(8, 6))
