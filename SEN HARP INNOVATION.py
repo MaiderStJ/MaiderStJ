@@ -15,8 +15,8 @@ num_firms = 120
 num_banks = 10
 num_households = 600
 num_centralbank = 1
-num_periods = 10
-num_simulations = 1
+num_periods = 25
+num_simulations = 10
 
 # Initialisation structurelle des 600 ménages
 random.seed(42)
@@ -61,6 +61,11 @@ params = {
 
     "epsilon_V": 0.1,  # Exemple valeur : intensité énergétique faible pour capital vert
     "epsilon_B": 0.3,  # Exemple valeur : intensité énergétique plus élevée pour capital brun
+
+    "A": 0.5,
+    "B": 1.0,
+    "C": 1.0,
+    "D": 1.0
 }
 
 paramsinnov = {
@@ -111,7 +116,7 @@ paramsinnov = {
 
 # Initialisation des variables biophysiques sur toute la durée des périodes
 # (à adapter au nombre total de périodes de ta simulation)
-num_periods = 10  # ou récupère la valeur réelle de ton modèle
+num_periods = 25  # ou récupère la valeur réelle de ton modèle
 
 nature = {
     "AtmosphericCO2Concentration": [params["AtmosphericPreIndustrialCO2Concentration"]] * num_periods,
@@ -336,26 +341,28 @@ def update_biophys_vars(nature, firms, t, params):
     damages = eta_1 * T_at + eta_2 * (T_at ** 2) + eta_3 * (T_at ** 6.754)
     nature["DamagesFunction"][t] = 1 - 1 / (1 + damages)
 
-def plot_climate_variables(nature, num_periods, scenario_name):
-    # Préparer un DataFrame pour seaborn
-    data = {
-        "Period": list(range(num_periods)),
-        "AtmosphericTemperature": nature["AtmosphericTemperature"][:num_periods],
-        "LowerOceansTemperature": nature["LowerOceansTemperature"][:num_periods],
-        "AtmosphericCO2Concentration": nature["AtmosphericCO2Concentration"][:num_periods],
-        "TotalEmissions": nature["TotalEmissions"][:num_periods],
-    }
-    df = pd.DataFrame(data)
-    df = df.melt(id_vars="Period", var_name="Variable", value_name="Value")
 
-    plt.figure(figsize=(12, 6))
-    sns.lineplot(data=df, x="Period", y="Value", hue="Variable")
-    plt.title(f"Évolution climatique dans le scénario {scenario_name}")
+def plot_atmospheric_temperature(results_df):
+    """
+    Trace l'évolution de la température atmosphérique
+    pour chaque scénario de politique.
+    """
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(
+        data=results_df,
+        x="Period",
+        y="AtmosphericTemperature",
+        hue="ScenarioName",
+        estimator="mean",
+        ci="sd"
+    )
+    plt.title("Évolution de la température atmosphérique selon les scénarios")
     plt.xlabel("Période")
-    plt.ylabel("Valeurs")
+    plt.ylabel("Température atmosphérique (°C)")
     plt.grid(True)
     plt.tight_layout()
     plt.show()
+
 
 def gini_coefficient(x):
     import numpy as np
@@ -486,8 +493,8 @@ def initialize_households_and_sales_from_struct(households_struct, firms, params
             "e": np.random.uniform(0.5, 1.5),
 
             # === Variables pour l’innovation ===
-            "Reservation_Price": np.random.uniform(0, 0.01),
-            "Reservation_X": np.random.uniform(0, 0.05),
+            "Reservation_Price": np.random.uniform(100, 1000),
+            "Reservation_X": np.random.uniform(0, 100),
             "RebuyProb": [0.8],
             "Regulation_Threat_Customer": [0],
             "Product_Type": [1],
@@ -534,8 +541,7 @@ def update_firm_characteristics_from_products(firms, t):
     """
 
     for f in firms:
-        portfolio = f.get("Portfolio", [0])[-1] if isinstance(f.get("Portfolio"), list) else f.get("Portfolio", 0)
-
+        portfolio = f.get("Portfolio", [0])[-1]
         # Initialiser les champs si nécessaire
         for var in ["X", "Eff", "Tox", "Bio", "Price"]:
             if var not in f:
@@ -725,8 +731,10 @@ def purchase_new(hh, sector_id, firms, t, params):
             else:
                 util = (params["D"] - bio * error) * (ms + np.random.uniform(0, 0.1)) ** e
 
-            if safe_get(firm.get("Portfolio", [0] * len(firm.get("X", []))), t, 0) == 0:
+            portfolio = firm.get("Portfolio", [0])
+            if safe_get(portfolio, t, 0) == 0:
                 util *= (1 - reg_threat)
+
 
         utilities.append(max(util, 0))
         candidate_firms.append(firm)
@@ -899,7 +907,7 @@ def update_firm_budget_vectorized(firm_list, t, params):
     rd_budget_last = np.array([f.get("RD_Budget", [0])[-1] for f in firm_list])
     switching_periods = np.array([f.get("Switching_Period", -1) for f in firm_list])
     switching_costs = np.array([f.get("Switching_Costs", 0) for f in firm_list])
-    portfolios = np.array([f.get("Portfolio", 0) for f in firm_list])
+    portfolios = np.array([f.get("Portfolio", [0])[-1] if isinstance(f.get("Portfolio"), list) else f.get("Portfolio", 0) for f in firm_list])
     new_firms = np.array([f.get("NewFirm", 0) for f in firm_list])
     rd_watch_last = np.array([f.get("RD_Watch", [0])[-1] for f in firm_list])
 
@@ -928,6 +936,9 @@ def update_firm_budget_vectorized(firm_list, t, params):
         alpha_watch = params.get("Alpha_Regu_Watch", 1)
         dead = np.where((portfolios == 0) & (rd_watch_last < avg_watch * alpha_watch), 1, dead)
 
+    # 🔒 Sécurisation : dead doit être un tableau 1D d'entiers
+    dead = np.array(dead).astype(int).reshape(-1)
+
     # Réécrire dans firm_list
     for i, firm in enumerate(firm_list):
         firm.setdefault("Budget", []).append(float(new_budget[i]))
@@ -952,12 +963,14 @@ def update_innovation_and_adoption(firm_list, household_list, t, paramsinnov):
             continue  # une firme morte ne peut plus adopter
 
         if "K" not in firm:
-            firm["K"] = [0.1] * (t+1)  # valeur initiale
+            firm["K"] = [0.1] * (t + 1)  # valeur initiale
         elif len(firm["K"]) <= t:
             firm["K"].append(firm["K"][-1])  # prolonge la série
 
+        # Accès au portefeuille actuel
+        portfolio = firm["Portfolio"][-1]
 
-        if firm["Portfolio"] == 0:  # pas encore adopté P2
+        if portfolio == 0:  # pas encore adopté P2
             adoption_index = firm["MarketShare"] * (
                 1 + paramsinnov["Alpha_Regu"] * t / (paramsinnov["Sunset_Date"] + paramsinnov["Revision_Period"])
             )
@@ -965,7 +978,7 @@ def update_innovation_and_adoption(firm_list, household_list, t, paramsinnov):
             if adoption_index > firm["AdoptionThreshold_MS"] and K_value > firm["AdoptionThreshold_K"]:
                 budget_t = firm["Budget"][t]
                 if budget_t >= firm["Switching_Costs"]:
-                    firm["Portfolio"] = 1
+                    firm["Portfolio"].append(1)  # passage en P1+P2
                     firm["Switching_Period"] = t + 1
                     # Initialisation techno 2 à l’adoption
                     firm["X_P2"].append(paramsinnov["Product2_Init_X"])
@@ -996,11 +1009,13 @@ def update_innovation_and_adoption(firm_list, household_list, t, paramsinnov):
         budget_t = firm["Budget"][t]
         rd_total = paramsinnov["RDshare"] * budget_t
 
-        if firm["Portfolio"] == 0:  # seulement P1
+        portfolio = firm["Portfolio"][-1]
+
+        if portfolio == 0:  # seulement P1
             rd1 = firm["RDSplit"] * rd_total
             rd2 = 0
             rd_watch = (1 - firm["RDSplit"]) * rd_total
-        elif firm["Portfolio"] == 1:  # P1 et P2
+        elif portfolio == 1:  # P1 et P2
             rd1 = firm["RDSplit"] * rd_total
             rd2 = (1 - firm["RDSplit"]) * rd_total
             rd_watch = 0
@@ -1018,8 +1033,10 @@ def update_innovation_and_adoption(firm_list, household_list, t, paramsinnov):
         if firm["Dead"][-1] == 1:
             continue
 
+        portfolio = firm["Portfolio"][-1]
+
         # Produit 1
-        if firm["Portfolio"] in [0, 1]:
+        if portfolio in [0, 1]:
             prob_innov = 1 - np.exp(-paramsinnov["scale"] * firm["RD1"][-1])
             # X
             if np.random.rand() < prob_innov:
@@ -1043,7 +1060,7 @@ def update_innovation_and_adoption(firm_list, household_list, t, paramsinnov):
                 firm["Bio_P1"].append(firm["Bio_P1"][-1])
 
         # Produit 2
-        if firm["Portfolio"] in [1, 2]:
+        if portfolio in [1, 2]:
             prob_innov = 1 - np.exp(-paramsinnov["scale"] * firm["RD2"][-1])
             # X
             if np.random.rand() < prob_innov:
@@ -1068,14 +1085,14 @@ def update_innovation_and_adoption(firm_list, household_list, t, paramsinnov):
 
     # === 5. Régulation (simplifiée) ===
     if t == paramsinnov["Sunset_Date"] + paramsinnov["Revision_Period"]:
-        eff_vals = [f["Eff_P2"][-1] for f in firm_list if f["Portfolio"] > 0]
-        x_vals = [f["X_P2"][-1] for f in firm_list if f["Portfolio"] > 0]
+        eff_vals = [f["Eff_P2"][-1] for f in firm_list if f["Portfolio"][-1] > 0]
+        x_vals = [f["X_P2"][-1] for f in firm_list if f["Portfolio"][-1] > 0]
         if eff_vals and x_vals:
             avg_eff_p2 = np.mean(eff_vals)
             avg_x_p2 = np.mean(x_vals)
             if avg_eff_p2 >= paramsinnov["Target_Eff"] and avg_x_p2 >= paramsinnov["Target_X"]:
                 for firm in firm_list:
-                    if firm["Portfolio"] == 0:
+                    if firm["Portfolio"][-1] == 0:
                         firm["Dead"].append(1)
                     else:
                         firm["Dead"].append(0)
@@ -1157,7 +1174,7 @@ for sim in range(num_simulations):
             "SelectedChampions": 1 if random.random() < 0.2 else 0,  # 20% des firmes sont champions
             "Production": [0]*num_periods,
             # === Variables d’innovation ===
-            "Portfolio": 0,  # 0 = produit 1, 1 = P1+P2, 2 = P2
+            "Portfolio": [0],   # toujours une liste
             "AdoptionThreshold_MS": np.random.uniform(0.01, 0.05),
             "AdoptionThreshold_K": np.random.uniform(0.01, 0.05),
             "Switching_Costs": np.random.uniform(0, 0.1),
@@ -1655,7 +1672,7 @@ for sim in range(num_simulations):
                 "BanksAnimalSpirits": bank["BanksAnimalSpirits"][t],
                 "ScenarioName": scenario_name,
                 "Revenue": firm["Revenue"][t] if "Revenue" in firm and len(firm["Revenue"]) > t else 0.0,
-
+                "AtmosphericTemperature": nature["AtmosphericTemperature"][t] if t < len(nature["AtmosphericTemperature"]) else np.nan,
             })
 
 
@@ -2046,8 +2063,10 @@ for sim in range(num_simulations):
         print(f"Période {t} : {changes} ménages ont changé de supplier.")
 
 
-        print(f"[Période {t}] Innovation active : "
-            f"{sum(1 for f in firm_list if f.get('Portfolio', 0) > 0)} firmes ont adopté le produit 2")
+        print(
+            f"[Période {t}] Innovation active : "
+            f"{sum(1 for f in firm_list if f.get('Portfolio', [0])[-1] > 0)} firmes ont adopté le produit 2"
+        )
 
 
  #       total_revenue = sum(
@@ -2157,7 +2176,10 @@ for h_id, h in enumerate(household_list):
 
 # --- À la fin de la simulation ---
 num_firms_alive = [sum(1 for f in firm_list if f["Dead"][t] == 0) for t in range(num_periods)]
-num_firms_p2 = [sum(1 for f in firm_list if f["Portfolio"] >= 1 and len(f["Portfolio"]) > 0) for t in range(num_periods)]
+num_firms_p2 = [
+    sum(1 for f in firm_list if len(f["Portfolio"]) > 0 and f["Portfolio"][-1] >= 1)
+    for t in range(num_periods)
+]
 
 avg_X_P2 = [np.mean([f["X_P2"][t] for f in firm_list if len(f["X_P2"]) > t]) for t in range(num_periods)]
 avg_Eff_P2 = [np.mean([f["Eff_P2"][t] for f in firm_list if len(f["Eff_P2"]) > t]) for t in range(num_periods)]
@@ -2209,7 +2231,7 @@ vote_df = pd.DataFrame(vote_records)
 gini_df = pd.DataFrame(gini_records)
 
 
-plot_climate_variables(nature, num_periods, scenario_name)
+plot_atmospheric_temperature(results_df)
 
 plt.figure(figsize=(10, 6))
 sns.lineplot(data=gini_df, x="Period", y="GiniDisposableIncome", hue="ScenarioName", estimator="mean", ci="sd")
