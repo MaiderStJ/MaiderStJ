@@ -17,7 +17,7 @@ num_banks = 10
 num_households = 600
 num_centralbank = 1
 num_periods = 25
-num_simulations = 3
+num_simulations = 10
 
 # Initialisation structurelle des 600 ménages
 random.seed(42)
@@ -38,7 +38,13 @@ scenarios_to_plot = []
 public_debt_records = []
 base_wage_list = [0.2]  # salaire de base à t=0
 
+base_wage0 = 0.2  # salaire initial
+base_wage_history = [base_wage0]
 
+base_inflation_rate = 0.02  # inflation “structurelle” (2 %)
+general_inflation = [base_inflation_rate for _ in range(num_periods)]
+
+previous_GDP = 90  # ou ton PIB initial si tu en as un
 
 # État persistant des politiques (peut être un dict global)
 POLICY_STATE = {
@@ -621,6 +627,61 @@ urban_prefs = {
 
 # Initialisation des 600 ménages avec statut, compétences et préférences
 households_struct = []
+
+# --- Helper : construire une version "par simulation" de households_struct ---
+def build_households_struct_for_run(base_struct,
+                                    num_firms,
+                                    rural_share,
+                                    urban_share,
+                                    rural_prefs,
+                                    urban_prefs):
+    """
+    Construit une nouvelle liste de ménages à partir de la structure calibrée base_struct,
+    en gardant exactement les mêmes nombres par statut / skill,
+    mais en randomisant :
+      - la localisation IdTerritory (avec la part rurale/urbaine cible)
+      - les préférences de consommation associées
+      - l'employeur IdEmployer pour les statuts employés.
+
+    → Calibration agrégée inchangée (n% au chômage, etc.)
+    → Micro-configuration différente à chaque simulation.
+    """
+    # 1) On repart uniquement des statuts et qualifications
+    households = []
+    for h in base_struct:
+        households.append({
+            "Status": h["Status"],
+            "SkillStatus": h["SkillStatus"],
+            # on recalculera IdTerritory, prefs et IdEmployer
+        })
+
+    N = len(households)
+    # Nombre de ruraux / urbains visés
+    N_rural = int(round(rural_share * N))
+    N_urban = N - N_rural
+
+    territories = [0] * N_rural + [1] * N_urban
+    random.shuffle(territories)
+
+    # 2) Assigner IdTerritory + préférences cohérentes
+    for h, terr in zip(households, territories):
+        h["IdTerritory"] = terr
+        prefs = rural_prefs if terr == 0 else urban_prefs
+        h.update(prefs)  # AgPref, EnerPref, etc.
+
+    # 3) Assigner un employeur aléatoire pour les ménages en emploi
+    employed_statuses = {1, 2, 5, 6}
+    for h in households:
+        if h["Status"] in employed_statuses:
+            h["IdEmployer"] = random.randint(0, num_firms - 1)
+        else:
+            h["IdEmployer"] = -1
+
+    # 4) Mélange final pour éviter tout biais d'ordre
+    random.shuffle(households)
+
+    return households
+
 
 # --- Calibration rural / urbain à partir des données UE27 ---
 rural_employed = 116_014_000
@@ -2233,7 +2294,7 @@ for sim in range(num_simulations):
         caproom_left[tt] = float("inf")
 
 
-    # Initialisation des politiques
+    """     # Initialisation des politiques
     carbon_tax_active = False
     transition_policy_active = False
     post_growth_policy_active = False
@@ -2244,6 +2305,7 @@ for sim in range(num_simulations):
         transition_policy_active = True
     elif scenario_name == "post_growth":
         post_growth_policy_active = True
+    """
 
     firm_list = []
     for i in range(num_firms):
@@ -2345,11 +2407,29 @@ for sim in range(num_simulations):
         f.setdefault("AlphaShared", [])     # part de prod dédiée au shared (indicatif)
         f.setdefault("SharedRevenue", [])   # recette publique (contrats shared)
 
-
+    """ 
     household_list, firm_list = initialize_households_and_sales_from_struct(
         households_struct, firm_list, params, num_sectors=6,
         rural_prefs=rural_prefs, urban_prefs=urban_prefs
     )
+    """  
+
+        # --- Nouvelle micro-configuration de ménages pour cette simulation ---
+    households_struct_run = build_households_struct_for_run(
+        households_struct,
+        num_firms=num_firms,
+        rural_share=rural_share,
+        urban_share=urban_share,
+        rural_prefs=rural_prefs,
+        urban_prefs=urban_prefs,
+    )
+
+    household_list, firm_list = initialize_households_and_sales_from_struct(
+        households_struct_run,  # <- au lieu de households_struct global
+        firm_list, params, num_sectors=6,
+        rural_prefs=rural_prefs, urban_prefs=urban_prefs
+    )
+
 
     bank_list = []
     for b in range(num_banks):
@@ -2385,12 +2465,16 @@ for sim in range(num_simulations):
     # Part verte initiale : très faible dans la réalité (5 % par défaut)
     INITIAL_GREEN_SHARE = 0.05
 
+    # Amplitude du choc politique de groupe (Territoire × Skill) dans la décision de vote
+    VOTE_GROUP_NOISE_SCALE = 0.8  # ajuste entre 0.2 et 1.0 selon la variabilité souhaitée
+
+
     # Classification des firmes par secteur (via IdSector → nom de secteur)
     firms_by_sector = {s: [] for s in sectors}
     for f in firm_list:
         sec_name = sectors[f["IdSector"] - 1]   # IdSector = 1..6
         firms_by_sector[sec_name].append(f)
-
+    """
     # Répartition du capital vert / brun à partir de l’Excel
     for sec, cap_total in fixed_assets_sector.items():
         fs = firms_by_sector.get(sec, [])
@@ -2408,6 +2492,26 @@ for sim in range(num_simulations):
         for f in fs:
             f["GreenCapital"][0] = green_per_firm
             f["BrownCapital"][0] = brown_per_firm
+    """
+    for sec, cap_total in fixed_assets_sector.items():
+        fs = firms_by_sector.get(sec, [])
+        if len(fs) == 0:
+            continue
+
+        # Capital vert et brun sectoriels (totaux calibrés)
+        cap_green = cap_total * INITIAL_GREEN_SHARE
+        cap_brown = cap_total * (1 - INITIAL_GREEN_SHARE)
+
+        n_f = len(fs)
+
+        # --- Tirage aléatoire de poids positifs, normalisés à 1 ---
+        raw_weights = np.random.rand(n_f)
+        weights = raw_weights / raw_weights.sum()
+
+        # --- Répartition hétérogène mais exactement agrégée ---
+        for f, w in zip(fs, weights):
+            f["GreenCapital"][0] = w * cap_green
+            f["BrownCapital"][0] = w * cap_brown
 
     # ========================================================
     #   CALIBRATION EXACTE DES PRÊTS BRUNS / PRÊTS VERTS
@@ -2526,6 +2630,31 @@ for sim in range(num_simulations):
     seeded_shared = False
 
     for t in range(num_periods):
+        # --- Mise à jour du salaire de base, selon scénario et politiques actives ---
+        if t == 0:
+            current_base_wage = base_wage_history[0]
+        else:
+            indexation_active = False
+
+            # Transition mix : indexation seulement si la politique de transition est active
+            if scenario_name == "transition_mix":
+                if len(TransitionActive) > t and TransitionActive[t] == 1:
+                    indexation_active = True
+
+            # Post-growth : indexation seulement si la politique post-growth est active
+            if scenario_name == "post_growth":
+                if len(PostGrowthActive) > t and PostGrowthActive[t] == 1:
+                    indexation_active = True
+
+            if indexation_active:
+                # Indexation sur l'inflation de la période t
+                current_base_wage = base_wage_history[-1] * (1 + general_inflation[t])
+            else:
+                # Pas d’indexation : salaire de base inchangé
+                current_base_wage = base_wage_history[-1]
+
+            base_wage_history.append(current_base_wage)
+
         # --- Semis du capital public partagé à partir du capital privé à t=0 ---
         seed_initial_shared_capital_from_private0(
             firm_list,
@@ -2904,8 +3033,8 @@ for sim in range(num_simulations):
             for key, value in {
                 "LoanInterestRate": random.uniform(0.01, 0.05),
                 "GreenLoanInterestRate": random.uniform(0.01, 0.05),
-                "AnimalSpirits_B": random.uniform(0, 0.02),
-                "AnimalSpirits_V": random.uniform(0, 0.02),
+                "AnimalSpirits_B": random.uniform(0, 0.01),
+                "AnimalSpirits_V": random.uniform(0, 0.01),
                 "gamma1": 0.01,
                 "gamma2": 0.01,
                 "gamma3": 0.01,
@@ -2945,12 +3074,15 @@ for sim in range(num_simulations):
                 )
                 firm["FullCapacityProduction"][0] = 0.8 * total_capital
             else:
-
-                base = base_wage * firm.get("ProductivityFactor", 1.0) * np.prod([(1 + general_inflation[i]) for i in range(t + 1)])
+                # base "effectif" de la firme : salaire de base (potentiellement indexé)
+                # multiplié par la productivité spécifique de la firme
+                base = current_base_wage * firm.get("ProductivityFactor", 1.0)
                 firm["BaseWage"].append(base)
-                low_brown_wage  = base_wage
-                low_green_wage  = base_wage * (1 + green_premium_low)
-                high_brown_wage = base_wage * (1 + skill_premium)
+
+                # Salaires par type d'emploi
+                low_brown_wage  = current_base_wage
+                low_green_wage  = current_base_wage * (1 + green_premium_low)
+                high_brown_wage = current_base_wage * (1 + skill_premium)
                 high_green_wage = high_brown_wage * (1 + green_premium_high)
 
                 firm["LowSkilledBrownWage"].append(low_brown_wage)
@@ -2974,11 +3106,14 @@ for sim in range(num_simulations):
             firm["FullCapacityProduction"].append(0.8 * prev_capital)
 
             # --- Taxe carbone éventuelle
-            carbon_cost = 0
-            if carbon_tax_active:
+            carbon_cost = 0.0
+            carbon_flag = 1 if (len(CarbonTaxActive) > t and CarbonTaxActive[t] == 1) else 0
+
+            if carbon_flag == 1:
                 carbon_tax_rate = 0.05
-                carbon_cost = carbon_tax_rate * firm["BrownCapital"][t - 1]
-            firm.setdefault("CarbonCost", []).append(carbon_cost)
+                brown_cap_prev = firm["BrownCapital"][t - 1] if len(firm["BrownCapital"]) > t - 1 else 0.0
+                carbon_cost = carbon_tax_rate * max(0.0, brown_cap_prev)
+
 
             # === Bloc investissement corrigé ===
             # === Bloc investissement avec symétrie Brown / Green ===
@@ -3137,11 +3272,20 @@ for sim in range(num_simulations):
                 household["BaseConsumption"].append(0)
                 household["Consumption"].append(0)
                 household["Savings"].append(household["Savings"][0])
-
-            household["w_needs"]     = random.uniform(0.1, 0.9)
+            """
+            household["w_needs_short"]     = random.uniform(0.1, 0.9)
+            household["w_needs_long"]     = random.uniform(0.1, 0.9)
             household["w_bandwagon"] = random.uniform(0.1, 0.9)
             household["w_inertia"]   = random.uniform(0.5, 1.0)  # on force une bonne inertie
             household["w_holistic"]  = random.uniform(0.1, 0.9)
+            """
+
+            household["w_needs_short"]     = 0.02
+            household["w_needs_long"]     = 0.02
+            household["w_bandwagon"] = 0.01
+            household["w_inertia"]   = 0.01 # on force une bonne inertie
+            household["w_holistic"]  = 0.02
+
 
             status = household["Status"]
             employer_id = household["IdEmployer"]
@@ -3193,33 +3337,36 @@ for sim in range(num_simulations):
             household["DisposableIncome"].append(disp_income)
 
             # --- IMPACT DE LA TAXE CARBONE SUR LE REVENU DISPONIBLE DES MÉNAGES ---
-            if carbon_tax_active:
-                carbon_tax_rate = 0.1  # Exemple : 5% de taxe
+            carbon_flag = 1 if (len(CarbonTaxActive) > t and CarbonTaxActive[t] == 1) else 0
+            if carbon_flag == 1:
+                carbon_tax_rate = 0.1
                 carbon_cost_household = carbon_tax_rate * household["DisposableIncome"][t]
-                household["DisposableIncome"][t] = max(0, household["DisposableIncome"][t] - carbon_cost_household)
+                household["DisposableIncome"][t] = max(
+                    0.0,
+                    household["DisposableIncome"][t] - carbon_cost_household
+                )
 
             # Paramètres de la politique sociale post growth
-            RBU_amount = 0.15 * np.prod([(1 + general_inflation[i]) for i in range(t + 1)])
+            RBU_amount = 0.18 * np.prod([(1 + general_inflation[i]) for i in range(t + 1)])
             # RBU_amount = 1  # Revenu de base universel fixe par ménage et période
-            income_tax_threshold = 1  # Seuil de revenu à partir duquel la taxe s'applique
+            income_tax_threshold = 0.5  # Seuil de revenu à partir duquel la taxe s'applique
             progressive_tax_rate = 0.15  # Taux d'imposition sur la part de revenu > threshold
 
-            if scenario_name == "post_growth":
-                income_t = household["Income"][t]
+            # Activation uniquement quand la politique post-growth est en vigueur politiquement
+            post_growth_flag = 1 if (scenario_name == "post_growth"
+                                    and len(PostGrowthActive) > t
+                                    and PostGrowthActive[t] == 1) else 0
 
-                # Calcul de la taxe progressive simulée sur hauts revenus
+            if post_growth_flag == 1:
+                income_t = household["Income"][t]
                 taxable_income = max(0, income_t - income_tax_threshold)
                 tax_amount = progressive_tax_rate * taxable_income
 
-                # Revenu disponible avant redistribution
                 dispo_before = household["DisposableIncome"][t]
-
-                # On retire la taxe
                 dispo_after_tax = max(0, dispo_before - tax_amount)
 
-                # Ajout du revenu de base universel
+                # Revenu de base universel
                 dispo_final = dispo_after_tax + RBU_amount
-
                 household["DisposableIncome"][t] = dispo_final
 
             # Calcul du coefficient de Gini sur le revenu disponible des ménages à la période t
@@ -3233,6 +3380,43 @@ for sim in range(num_simulations):
                 "GiniDisposableIncome": gini_t,
                 "ScenarioName": scenario_name
             })
+
+        # ============================================================
+        #  INFLATION GÉNÉRALE AVEC EFFET TAXE CARBONE (MACRO)
+        # ============================================================
+
+        # 1) Somme de la taxe carbone payée par les firmes à la période t
+        total_carbon_tax_t = 0.0
+        for f in firm_list:
+            carbon_list = f.get("CarbonTaxPaid", [])
+            if len(carbon_list) > t:
+                total_carbon_tax_t += float(carbon_list[t])
+
+        # 2) PIB de la période précédente (évite les boucles circulaires)
+        GDP_t_minus_1 = previous_GDP
+
+        if GDP_t_minus_1 > 0.0:
+            carbon_tax_share_t = total_carbon_tax_t / GDP_t_minus_1
+        else:
+            carbon_tax_share_t = 0.0
+
+        # 3) La taxe n’affecte l’inflation que si la taxe carbone est politiquement active
+        carbon_flag_t = 1 if (len(CarbonTaxActive) > t and CarbonTaxActive[t] == 1) else 0
+
+        # Sensibilité de l’inflation à la taxe carbone :
+        # ex : si Taxe = 2 % du PIB et phi = 0.5 → +1 pt d’inflation
+        phi_inflation = 0.5
+
+        extra_inflation_t = phi_inflation * carbon_tax_share_t * carbon_flag_t
+
+        # 4) Inflation générale = inflation de base + choc taxe carbone
+        new_inflation_t = base_inflation_rate + extra_inflation_t
+
+        # bornes de sécurité
+        new_inflation_t = max(-0.05, min(0.20, new_inflation_t))
+
+        general_inflation[t] = new_inflation_t
+
 
         # -- Prix sectoriels (inflation + pass-through de la taxe carbone) : MAJ 1x par t
         sector_names = ["Agriculture", "Energy", "Housing", "Transport", "Industry", "Technology"]
@@ -3302,6 +3486,18 @@ for sim in range(num_simulations):
         price_trans_list.append(price_trans)
         price_ind_list.append(price_ind)
         price_tech_list.append(price_tech)
+
+        # === Choc politique de groupe (Territoire × Skill) pour la période t ===
+        # On construit un choc commun pour chaque bloc : (IdTerritory, SkillStatus)
+        group_vote_shock = {}
+        for h in household_list:
+            terr = h.get("IdTerritory", 1)   # 0 = rural, 1 = urbain (par défaut 1 si manquant)
+            skill = h.get("SkillStatus", 0)  # 0/1/2 selon ta calibration
+            key = (terr, skill)
+            if key not in group_vote_shock:
+                # même choc pour tous les ménages de ce bloc à la période t
+                group_vote_shock[key] = random.uniform(-VOTE_GROUP_NOISE_SCALE,
+                                                      VOTE_GROUP_NOISE_SCALE)
 
 
         # -- Boucle ménages (UNE seule écriture de Consumption & SuppCons) — déplacée ici, non imbriquée
@@ -3441,8 +3637,22 @@ for sim in range(num_simulations):
             vote_prev = household["VoteDecision"][t - 1]
             bandwagon_prev = bandwagon_effect[t - 1]
 
+            if t >= 5:
+                needs_index_5ago = household["NeedsIndex"][t - 5]
+            else:
+                # avant t=5, on prend la première valeur disponible (t=0) comme proxy
+                needs_index_5ago = household["NeedsIndex"][0]
+
+            delta_needs_short = needs_index - needs_index_prev      # variation courte
+            delta_needs_long  = needs_index - needs_index_5ago      # variation sur 5 périodes
+
+            w_needs_short = household["w_needs_short"]        # si tu as déjà stocké des poids
+            w_needs_long  = household.get("w_needs_long", w_needs_short)
+
+
             # Pondérations
-            w_needs     = household["w_needs"]
+            w_needs_short = household["w_needs_short"]
+            w_needs_long = household["w_needs_long"]
             w_bandwagon = household["w_bandwagon"]
             w_inertia   = household["w_inertia"]
             w_holistic  = household["w_holistic"]
@@ -3458,20 +3668,28 @@ for sim in range(num_simulations):
             else:
                 banks_ratio = get_banks_profits_to_gdp_ratio(t - 1)
 
-            x = random.uniform(0.5, 1) - gini_for_vote - banks_ratio
+            x = random.uniform(0, 1) - gini_for_vote - banks_ratio
 
             # --- Calcul de la probabilité de voter pro-transition ---
 
             # On combine besoins, bandwagon, inertie et effet holiste
             vote_raw = (
-                w_needs     * (needs_index - needs_index_prev) +
-                w_bandwagon * bandwagon_prev +
-                w_inertia   * vote_prev +
-                w_holistic  * x
+                w_needs_short * delta_needs_short +
+                w_needs_long  * delta_needs_long +
+                w_bandwagon   * bandwagon_prev +
+                w_inertia     * vote_prev +
+                w_holistic    * x
             )
+            # --- Ajout du choc politique de groupe (Territoire × Skill) ---
+
+            terr = household.get("IdTerritory", 1)
+            skill = household.get("SkillStatus", 0)
+            key = (terr, skill)
+            eps_group = group_vote_shock.get(key, 0.0)
 
             # Passage par une logistique pour obtenir une probabilité entre 0 et 1
-            vote_prob = 1.0 / (1.0 + math.exp(-vote_raw))
+            # avec le choc de groupe
+            vote_prob = 1.0 / (1.0 + math.exp(-(vote_raw + eps_group)))
 
             # Décision finale
             new_vote = 1 if random.random() < vote_prob else 0
@@ -3758,6 +3976,8 @@ for sim in range(num_simulations):
         # === Enregistrement dette publique (mêmes clés que gdp_records : Period, Scenario) ===
         # On prend le PIB courant tel qu'il vient d'être calculé (cohérent avec gdp_records)
         gdp_current_t = CTot_t + GTot_t + ITot_t
+        previous_GDP = gdp_current_t
+
 
         # Valeurs gouvernement / BC / banques à t (robustes si la liste est courte)
         debt_t      = Government["PublicDebt"][t] if len(Government["PublicDebt"]) > t else 0.0
