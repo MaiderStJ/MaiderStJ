@@ -6,9 +6,14 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import math
 from copy import deepcopy
+import scipy
+from scipy.stats import kruskal
+from statsmodels.stats.proportion import proportion_confint
+from scipy.stats import chi2_contingency   # test de significativité pour réélection (binaire)
 
 # Début du chronomètre
 start_time = time.time()
+
 
 # Paramètres du modèle
 sectors = ["Agriculture", "Energy", "Housing", "Transport", "Industry", "Technology"]
@@ -17,7 +22,7 @@ num_banks = 10
 num_households = 600
 num_centralbank = 1
 num_periods = 25
-num_simulations = 10
+num_simulations = 30
 
 # Initialisation structurelle des 600 ménages
 random.seed(42)
@@ -25,6 +30,17 @@ np.random.seed(42)
 
 # Avant les runs
 GDP = []  
+
+
+VOTE_SIGNAL_SCALE = 20.0   # 5, 10, 20, 50 selon calibration
+VOTE_NOISE_SCALE  = 0.15   # 0.05 à 0.30
+VOTE_LOGIT_SLOPE  = 1.2    # 1.0 standard, >1 plus réactif
+VOTE_IDIO_SIGMA   = 0   # optionnel: micro-bruit (0.0 pour désactiver)
+
+ELECTION_INTERVAL = 5   # élections tous les 5 ans
+election_periods = list(range(0, num_periods, ELECTION_INTERVAL))  # utilise num_periods
+vote_raw_records = []
+vote_prob_records = []
 
 # =========================================================
 # === PATCH 1: Caches pour les agrégats de consommation ===
@@ -41,15 +57,48 @@ base_wage_list = [0.2]  # salaire de base à t=0
 base_wage0 = 0.2  # salaire initial
 base_wage_history = [base_wage0]
 
-base_inflation_rate = 0.02  # inflation “structurelle” (2 %)
+base_inflation_rate = 0  # inflation “structurelle” (2 %)
 general_inflation = [base_inflation_rate for _ in range(num_periods)]
 
+climate_records = []
+
 previous_GDP = 90  # ou ton PIB initial si tu en as un
+# === Paramètres de la fonction de consommation post-growth ===
+PG_NEEDS_ALPHA = 1.2   # agressivité de la baisse de MPC quand les besoins sont très satisfaits
+PG_MPC_FLOOR   = 0.35  # MPC minimale (corridor supérieur de conso privée)
+PG_TIME_STEP   = 5     # nb de périodes d'activation post-growth pour un palier de baisse
+PG_TIME_ALPHA  = 0.15  # intensité de la baisse de MPC avec la durée de la politique
+
+# Part verte initiale : très faible dans la réalité (5 % par défaut)
+INITIAL_GREEN_SHARE = 0.05
+
+TARGET_GREEN_GROWTH = 0.1  # +10 % de capital vert par an (par secteur)
+
 
 # État persistant des politiques (peut être un dict global)
 POLICY_STATE = {
     "brown_credit_initial_cap": None  # sera fixé au 1er t actif en post_growth
 }
+
+def _pstars(p):
+    if p < 0.01:
+        return "***"
+    if p < 0.05:
+        return "**"
+    if p < 0.10:
+        return "*"
+    return "n.s."
+
+def _annotate_pvalue(ax, pval, label_prefix="Kruskal–Wallis"):
+    txt = f"{label_prefix}: p = {pval:.3g} ({_pstars(pval)})"
+    ax.text(
+        0.02, 0.98, txt,
+        transform=ax.transAxes,
+        ha="left", va="top",
+        fontsize=11,
+        bbox=dict(boxstyle="round,pad=0.25", alpha=0.15)
+    )
+
 
 def _consecutive_active(active_list, t):
     k, i = 0, t
@@ -418,38 +467,62 @@ def build_public_debt_df_from_scenarios(scenarios_to_plot, num_periods):
 
 params = {
     # Coefficients de cycle du carbone
-    "phi_11": 0.6,
-    "phi_21": 0.25,
-    "phi_12": 0.35,
-    "phi_22": 0.45,
-    "phi_32": 0.1,
-    "phi_23": 0.15,
-    "phi_33": 0.7,
-    
-    # Forçage radiatif
-    "RF_2CO2": 3.7,
-    
-    # Concentration CO2 pré-industrielle (ppm)
-    "AtmosphericPreIndustrialCO2Concentration": 280,
-    
-    # Sensibilité climatique (°C)
+    # === Module climat / environnement (Dafermos-like) ===
+
+    # Coefficients de cycle du carbone (Dafermos et al.)
+    "phi_11": 0.9817,
+    "phi_12": 0.0183,
+    "phi_21": 0.0080,
+    "phi_22": 0.9915,
+    "phi_23": 0.0005,
+    "phi_32": 0.0001,
+    "phi_33": 0.9999,
+
+    # Forçage radiatif pour doublement du CO₂
+    "RF_2CO2": 3.8,
+
+    # Concentration de CO₂ pré-industrielle (ici en Gt, comme dans Dafermos)
+    "AtmosphericPreIndustrialCO2Concentration": 2156.2,
+
+    # Niveaux initiaux des stocks de CO₂ (Gt)
+    "CO2_AT0": 3120.0,    # atmosphère
+    "CO2_UP0": 5628.8,    # biosphère / upper ocean
+    "CO2_LO0": 36706.7,   # lower ocean
+
+    # Températures initiales (°C au-dessus du pré-industriel)
+    "T_AT0": 1.0,
+    "T_LO0": 0.0068,
+
+    # Sensibilité climatique (°C pour un doublement du CO₂)
     "CS": 3.0,
-    
-    # Coefficients temps (discrétisation température)
-    "t_1": 0.2,
-    "t_2": 0.1,
-    "t_3": 0.05,
-    
-    # Coefficients fonction dommages climatiques
-    "eta_1": 0.01,
-    "eta_2": 0.005,
-    "eta_3": 0.0001,
-    
-    # Emissions industrielles : part énergie non renouvelable
+
+    # Coefficients de dynamique de température (Dafermos approximés)
+    "t_1": 0.027,
+    "t_2": 0.0018,
+    "t_3": 0.005,
+
+    # Coefficients fonction de dommages climatiques (forme simple)
+    # damages = eta_1*T + eta_2*T^2 + eta_3*T^6
+    "eta_1": 0.0,
+    "eta_2": 0.00284,
+    "eta_3": 0.000005,
+
+    # Part des dommages qui passe par la productivité et le capital
+    # (répartition très simple, à affiner plus tard)
+    "damage_prod_share": 0.7,   # 70 % des dommages → productivité
+    "damage_cap_share": 0.3,    # 30 % des dommages → capital
+
+    # Emissions industrielles UE : part de l’énergie non renouvelable
     "emissions_share": 0.8,
-    
-    # Changement d'usage des sols (taux de déclin émissions terres)
+
+    # Changement d’usage des sols (taux de déclin annuel des émissions de terres)
     "land_use_change": 0.01,
+
+    # Trajectoire exogène des émissions mondiales (Gt CO₂)
+    "WorldEmissions0": 40.0,     # émissions mondiales t = 0
+    "WorldEmissionsGrowth": 0.01,  # croissance annuelle (1 %)
+
+    "energy_per_output": 0.0005,  # EJ par unité de production (à calibrer)
 
     "epsilon_V": 0.1,  # Exemple valeur : intensité énergétique faible pour capital vert
     "epsilon_B": 0.3,  # Exemple valeur : intensité énergétique plus élevée pour capital brun
@@ -457,17 +530,36 @@ params = {
     "A": 0.5,
     "B": 1.0,
     "C": 1.0,
-    "D": 1.0
+    "D": 1.0,
+
+    "WorldEmissions0": 40.0,        # émissions mondiales initiales (Oslo)
+    "WorldEmissionsGrowth": 0.01,   # croissance annuelle des émissions du reste du monde
+    "EU_LandUseEmissions0": 0.01,    # Gt CO2 de land use UE à t=0 (à ajuster si tu veux)
+    
+    "EU_EmissionsTarget0": 3.0,
+
+    # === Emissions hors UE (exogènes) ===
+    "RoW_Emissions0": 37.0,       # GtCO2/an (ex: 40 - 3)
+    "RoW_EmissionsGrowth": 0.01,  # croissance exogène RoW
+
+    # === Forçage radiatif non-CO2 (Dafermos) ===
+    "F_ex0": 0.28,   # W/m2
+    "f_ex": 0.005,   # W/m2 par an
+
+
 }
 
 # === [NOUVEAU] Paramètres de socialisation de la consommation (activés seulement en post_growth) ===
 social = {
     # part socialisée cible par secteur (1: Agri, 2: Énergie, 3: Logement, 4: Transport, 5: Industrie, 6: Tech)
     # social (remplace ces valeurs si déjà posées)
-    "target_share": {1: 0.6, 2: 1, 3: 0.75, 4: 0.70, 5: 0.25, 6: 0.25},
+    "target_share": {1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1},
+
+#    "target_share": {1: 0.6, 2: 1, 3: 0.75, 4: 0.70, 5: 0.25, 6: 0.25},
     "ramp_periods": 3,  # au lieu de 12
+    "deramp_periods": 5,    # 5 périodes pour sortir progressivement de la politique
     "hysteresis": 0.10,         # bande de variation max d'une période à l'autre pour la part allouée aux firmes
-    "admin_price_factor": 0.60, # prix administré relatif au prix privé moyen (stabilise sans être gratuit)
+    "admin_price_factor": 0.50, # prix administré relatif au prix privé moyen (stabilise sans être gratuit)
     "min_public_fill": 0.10,    # si capacité privée shared insuffisante, comblement public minimal
 }
 
@@ -592,16 +684,30 @@ paramsinnov = {
 num_periods = 25  # ou récupère la valeur réelle de ton modèle
 
 nature = {
-    "AtmosphericCO2Concentration": [params["AtmosphericPreIndustrialCO2Concentration"]] * num_periods,
-    "BiosphereCO2Concentration": [150] * num_periods,  # estimation initiale
-    "LowerOceansCO2Concentration": [90] * num_periods,  # estimation initiale
-    "IndustrialEmissions": [0.0] * num_periods,
-    "LandUseEmissions": [0.0] * num_periods,
-    "TotalEmissions": [0.0] * num_periods,
-    "AtmosphericTemperature": [1.0] * num_periods,  # °C absolue ou anomaly selon ton modèle
-    "LowerOceansTemperature": [0.0068] * num_periods,
+    # Stocks de CO₂ (Gt) – initialisés avec les valeurs Oslo
+    "AtmosphericCO2Concentration": [params["CO2_AT0"]] + [0.0] * (num_periods - 1),
+    "BiosphereCO2Concentration":   [params["CO2_UP0"]] + [0.0] * (num_periods - 1),
+    "LowerOceansCO2Concentration":[params["CO2_LO0"]] + [0.0] * (num_periods - 1),
+
+    # Emissions UE
+    "IndustrialEmissions": [0.0] * num_periods,   # UE
+    "LandUseEmissions":    [0.0] * num_periods,   # UE
+    "TotalEmissions":      [0.0] * num_periods,   # UE total
+
+    # Emissions reste du monde + monde
+    "RestOfWorldEmissions": [0.0] * num_periods,
+    "WorldEmissions":       [0.0] * num_periods,
+    "EUShareWorldEmissions":[0.0] * num_periods,
+
+    # Températures
+    "AtmosphericTemperature": [params["T_AT0"]] + [0.0] * (num_periods - 1),
+    "LowerOceansTemperature": [params["T_LO0"]] + [0.0] * (num_periods - 1),
+
+    # Forçage et dommages
     "RadiativeForcing": [0.0] * num_periods,
-    "DamagesFunction": [0.0] * num_periods,
+    "DamagesFunction":  [0.0] * num_periods,
+    "F_ex": [params.get("F_ex0", 0.28)] + [0.0] * (num_periods - 1),
+
 }
 
 
@@ -778,7 +884,9 @@ status_share_records = []
 policy_outcomes = []
 policy_records = []
 household_records = []
+election_records = []
 vote_records = []
+emission_records = []
 
 # Budget libéré non redépensé (trace) et taux de neutralisation du rebond
 no_respend_rate = 0.7   # 70 % du budget libéré n’est pas redépensé sur le marché
@@ -811,6 +919,36 @@ I_pub_shared_list            = [0.0 for _ in range(num_periods)]
 SocializationSavings_list    = [0.0 for _ in range(num_periods)]
 
 is_carbon_tax_scenario = False
+
+def plot_emissions_growth(emissions_df):
+    """
+    Trace le taux de croissance des émissions par période et par scénario.
+    EmissionsGrowthPct est en % (pct_change * 100).
+    """
+    if emissions_df.empty:
+        print("⚠️ emissions_df est vide, rien à tracer.")
+        return
+
+    df = emissions_df.copy()
+    # On exclut la période 0 pour la lisibilité (croissance = 0 par convention)
+    df = df[df["Period"] > 0]
+
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(
+        data=df,
+        x="Period",
+        y="EmissionsGrowthPct",
+        hue="ScenarioName",
+        estimator="mean",  # moyenne sur les simulations
+        ci="sd"            # écart-type comme bande d’incertitude
+    )
+    plt.axhline(0, linestyle="--", linewidth=1)
+    plt.title("Taux de croissance des émissions par scénario")
+    plt.xlabel("Période")
+    plt.ylabel("Croissance des émissions (%)")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
 
 def plot_gdp_components(gdp_df):
 
@@ -851,94 +989,208 @@ def plot_gdp_components(gdp_df):
     plt.show()
 
 def compute_firm_energy_intensity(firm, t, epsilon_V, epsilon_B):
-    green_cap = firm["GreenCapital"][t] if t < len(firm["GreenCapital"]) else 0
-    brown_cap = firm["BrownCapital"][t] if t < len(firm["BrownCapital"]) else 0
+    """
+    Version simple : intensité énergétique en fonction du mix de capital vert / brun,
+    sans ajustement supplémentaire par secteur.
+    """
+    green_cap = firm["GreenCapital"][t] if t < len(firm["GreenCapital"]) else 0.0
+    brown_cap = firm["BrownCapital"][t] if t < len(firm["BrownCapital"]) else 0.0
     total_cap = green_cap + brown_cap
-    green_ratio = green_cap / total_cap if total_cap > 0 else 0
+    green_ratio = green_cap / total_cap if total_cap > 0 else 0.0
 
-    # intensité de base (ta logique)
-    intensity_base = green_ratio * epsilon_V + (1 - green_ratio) * epsilon_B
+    intensity = green_ratio * epsilon_V + (1 - green_ratio) * epsilon_B
+    return intensity
 
-    # ajustement PRODUCTION-BASED par secteur (post-growth socialisé)
-    sid = int(firm.get("SectorId", 5))  # fallback industrie
-    factor = prod_intensity_factor(t, sid, kind="energy")
-
-    return intensity_base * factor
 
 def update_biophys_vars(nature, firms, t, params):
+    """
+    Met à jour les variables biophysiques (CO2, températures, dommages)
+    à partir des émissions industrielles + usage des sols.
+    Compatible avec la structure actuelle :
+    - nature : dict de listes de longueur num_periods
+    - params : dict déjà défini plus haut
+    - firms : liste de firmes avec Production, GreenCapital, BrownCapital
+    """
     import math
 
+    # --- Récupération des valeurs historiques ---
     CO2_prev = nature["AtmosphericCO2Concentration"][t-1] if t > 0 else nature["AtmosphericCO2Concentration"][0]
     Biosphere_CO2_prev = nature["BiosphereCO2Concentration"][t-1] if t > 0 else nature["BiosphereCO2Concentration"][0]
     LowerOceans_CO2_prev = nature["LowerOceansCO2Concentration"][t-1] if t > 0 else nature["LowerOceansCO2Concentration"][0]
     Temp_Atmos_prev = nature["AtmosphericTemperature"][t-1] if t > 0 else nature["AtmosphericTemperature"][0]
     Temp_Oceans_prev = nature["LowerOceansTemperature"][t-1] if t > 0 else nature["LowerOceansTemperature"][0]
 
-    # === Emissions industrielles (production-based, avec facteur mu_energy par secteur)
+    # --- Emissions industrielles UE (cumulées sur les firmes) ---
     industrial_emissions = 0.0
     epsilon_V = params["epsilon_V"]
     epsilon_B = params["epsilon_B"]
     emissions_share = params["emissions_share"]
 
     for firm in firms:
-        # intensité énergétique de la firme (déjà sectorisée par prod_intensity_factor)
+        # Intensité énergétique micro
         energy_intensity = compute_firm_energy_intensity(firm, t, epsilon_V, epsilon_B)
 
-        production = firm["Production"][t] if t < len(firm["Production"]) else 0.0
-        energy_needed = energy_intensity * production
+        production = firm["Production"][t] if t < len(firm["Production"]) else 0.0        
+        energy_needed = energy_intensity * production * params["energy_per_output"]
 
-        green_cap = firm["GreenCapital"][t] if t < len(firm["GreenCapital"]) else 0
-        brown_cap = firm["BrownCapital"][t] if t < len(firm["BrownCapital"]) else 0
+        green_cap = firm["GreenCapital"][t] if t < len(firm["GreenCapital"]) else 0.0
+        brown_cap = firm["BrownCapital"][t] if t < len(firm["BrownCapital"]) else 0.0
         total_cap = green_cap + brown_cap
         green_ratio = green_cap / total_cap if total_cap > 0 else 0.0
 
-        renewable_share = 1 / (1 + 1/(0.54 * green_ratio)) if green_ratio > 0 else 0.0
+        # Part renouvelable en fonction du green_ratio
+        #renewable_share = 1 / (1 + 1 / (0.54 * green_ratio)) if green_ratio > 0 else 0.0
+        renewable_share =  green_ratio if green_ratio > 0 else 0.0
         renewable_energy = renewable_share * energy_needed
         non_renewable_energy = energy_needed - renewable_energy
 
+        # Emissions industrielles UE (proportion de l'énergie non renouvelable)
         industrial_emissions += emissions_share * non_renewable_energy
-
+        
+    # Emissions industrielles UE
     nature["IndustrialEmissions"][t] = float(industrial_emissions)
 
-    # === Emissions usage des sols (inchangé)
+    # --- Emissions liées à l’usage des sols (UE) ---
     land_use_change = params.get("land_use_change", 0.01)
     if t == 0:
-        nature["LandUseEmissions"][t] = 0.0
+        land_use0 = params.get("EU_LandUseEmissions0", 0.01)
+        nature["LandUseEmissions"][t] = float(land_use0)
     else:
-        nature["LandUseEmissions"][t] = float(nature["LandUseEmissions"][t-1] * (1 - land_use_change))
+        nature["LandUseEmissions"][t] = float(
+            nature["LandUseEmissions"][t - 1] * (1 - land_use_change)
+        )
 
-    # Total (production-based seulement)
-    nature["TotalEmissions"][t] = float(nature["IndustrialEmissions"][t] + nature["LandUseEmissions"][t])
+    # ============================================================
+    # EMISSIONS (Dafermos-like) : UE endogène + RoW exogène = Monde
+    # ============================================================
 
-    # === CO2 box model (inchangé)
-    phi_11 = params["phi_11"]; phi_21 = params["phi_21"]; phi_12 = params["phi_12"]
-    phi_22 = params["phi_22"]; phi_32 = params["phi_32"]; phi_23 = params["phi_23"]; phi_33 = params["phi_33"]
+    # --- Total UE (endogène) ---
+    EU_total_t = float(nature["IndustrialEmissions"][t] + nature["LandUseEmissions"][t])
+    nature["TotalEmissions"][t] = EU_total_t  # UE total
 
-    nature["AtmosphericCO2Concentration"][t] = float(nature["TotalEmissions"][t] + phi_11 * CO2_prev + phi_21 * Biosphere_CO2_prev)
-    nature["BiosphereCO2Concentration"][t]   = float(phi_12 * CO2_prev + phi_22 * Biosphere_CO2_prev + phi_32 * LowerOceans_CO2_prev)
-    nature["LowerOceansCO2Concentration"][t] = float(phi_23 * Biosphere_CO2_prev + phi_33 * LowerOceans_CO2_prev)
+    # --- Reste du monde (exogène autonome) ---
+    RoW0 = params.get("RoW_Emissions0", 37.0)          # GtCO2/an
+    g_row = params.get("RoW_EmissionsGrowth", 0.01)   # croissance exogène
+    rest_of_world = float(RoW0 * ((1.0 + g_row) ** t))
 
-    # === Forçage radiatif (inchangé)
+    nature["RestOfWorldEmissions"][t] = rest_of_world
+
+    # --- Monde (somme, donc endogène via UE) ---
+    world_emissions_t = float(EU_total_t + rest_of_world)
+    nature["WorldEmissions"][t] = world_emissions_t
+    nature["EUShareWorldEmissions"][t] = float(EU_total_t / world_emissions_t) if world_emissions_t > 0 else 0.0
+
+    # --- 0. Ne pas écraser les conditions initiales pour t = 0 ---
+    if t == 0:
+        # Mise à jour de F_ex (non-CO2) et calcul du forçage cohérent
+        F_ex0 = params.get("F_ex0", 0.28)
+        nature["F_ex"][0] = float(F_ex0)
+
+        RF_2CO2 = params["RF_2CO2"]
+        CO2_preindustrial = params["AtmosphericPreIndustrialCO2Concentration"]
+        CO2_atm_0 = nature["AtmosphericCO2Concentration"][0]
+
+        ratio0 = max(CO2_atm_0 / CO2_preindustrial, 1e-9) if CO2_preindustrial > 0 else 1.0
+        F0 = float(RF_2CO2 * math.log(ratio0, 2) + nature["F_ex"][0])
+        nature["RadiativeForcing"][0] = F0
+
+        # Dommages init (optionnel) - sans toucher aux températures
+        eta_1 = params["eta_1"]
+        eta_2 = params["eta_2"]
+        eta_3 = params["eta_3"]
+        T0 = nature["AtmosphericTemperature"][0]
+
+        damages0 = eta_1*T0 + eta_2*(T0**2) + eta_3*(T0**6)
+        nature["DamagesFunction"][0] = 1 - 1/(1 + damages0)
+
+        return
+
+    # --- Cycle du carbone (3 boîtes) ---
+    phi_11 = params["phi_11"]
+    phi_21 = params["phi_21"]
+    phi_12 = params["phi_12"]
+    phi_22 = params["phi_22"]
+    phi_32 = params["phi_32"]
+    phi_23 = params["phi_23"]
+    phi_33 = params["phi_33"]
+
+    nature["AtmosphericCO2Concentration"][t] = float(
+        nature["WorldEmissions"][t] + phi_11 * CO2_prev + phi_21 * Biosphere_CO2_prev
+    )
+    nature["BiosphereCO2Concentration"][t] = float(
+        phi_12 * CO2_prev + phi_22 * Biosphere_CO2_prev + phi_32 * LowerOceans_CO2_prev
+    )
+    nature["LowerOceansCO2Concentration"][t] = float(
+        phi_23 * Biosphere_CO2_prev + phi_33 * LowerOceans_CO2_prev
+    )
+
+    # --- Radiative forcing non-CO2 (Dafermos) ---
+    f_ex = params.get("f_ex", 0.005)
+    nature["F_ex"][t] = float(nature["F_ex"][t-1] + f_ex)
+
+    # --- Forçage radiatif ---
     RF_2CO2 = params["RF_2CO2"]
     CO2_preindustrial = params["AtmosphericPreIndustrialCO2Concentration"]
-    ratio = nature["AtmosphericCO2Concentration"][t] / CO2_preindustrial if CO2_preindustrial > 0 else 1.0
-    radiative_forcing = math.log(RF_2CO2 * ratio) / math.log(2) if ratio > 0 else 0.0
-    nature["RadiativeForcing"] = radiative_forcing
+    CO2_atm_t = nature["AtmosphericCO2Concentration"][t]
 
-    # === Températures (inchangé)
-    CS = params["CS"]; t_1 = params["t_1"]; t_2 = params["t_2"]; RF = radiative_forcing
-    part = RF - (RF_2CO2 / CS)
-    temp_inter = part * Temp_Atmos_prev - t_2 * (Temp_Atmos_prev - Temp_Oceans_prev)
-    nature["AtmosphericTemperature"][t] = t_1 * temp_inter
 
+    # ratio CO2_t / CO2_0 (on évite 0)
+    if CO2_preindustrial > 0:
+        ratio = max(CO2_atm_t / CO2_preindustrial, 1e-9)
+    else:
+        ratio = 1.0
+
+    # RF_t = RF_2CO2 * log2(CO2_t / CO2_0)
+    RF = float(RF_2CO2 * math.log(ratio, 2) + nature["F_ex"][t])
+    nature["RadiativeForcing"][t] = RF
+
+    # --- Températures atmosphère / océans (mise à jour incrémentale) ---
+    CS = params["CS"]
+    t_1 = params["t_1"]
+    t_2 = params["t_2"]
     t_3 = params["t_3"]
-    nature["LowerOceansTemperature"][t] = Temp_Oceans_prev + t_3 * (Temp_Atmos_prev - Temp_Oceans_prev)
 
-    # === Dommages (inchangé)
-    eta_1 = params["eta_1"]; eta_2 = params["eta_2"]; eta_3 = params["eta_3"]
+    # "lambda" climatique ~ RF_2CO2 / CS
+    lambda_clim = RF_2CO2 / CS
+
+    if t == 0:
+        # On garde les conditions initiales T_AT[0] = 1.0, T_LO[0] = 0.0068
+        nature["AtmosphericTemperature"][0] = Temp_Atmos_prev
+        nature["LowerOceansTemperature"][0] = Temp_Oceans_prev
+    else:
+        # Atmosphère : T_t = T_{t-1} + t1 * (RF - lambda*T_{t-1} - t2*(T_{t-1} - T_oc_{t-1}))
+        dT_at = t_1 * (RF - lambda_clim * Temp_Atmos_prev - t_2 * (Temp_Atmos_prev - Temp_Oceans_prev))
+        T_at_new = Temp_Atmos_prev + dT_at
+
+        # Océan profond : T_oc_t = T_oc_{t-1} + t3*(T_{t-1} - T_oc_{t-1})
+        dT_oc = t_3 * (Temp_Atmos_prev - Temp_Oceans_prev)
+        T_oc_new = Temp_Oceans_prev + dT_oc
+
+        nature["AtmosphericTemperature"][t] = T_at_new
+        nature["LowerOceansTemperature"][t] = T_oc_new
+
+    # --- Dommages climatiques ---
+    eta_1 = params["eta_1"]
+    eta_2 = params["eta_2"]
+    eta_3 = params["eta_3"]
     T_at = nature["AtmosphericTemperature"][t]
-    damages = eta_1 * T_at + eta_2 * (T_at ** 2) + eta_3 * (T_at ** 6.754)
+
+    # éviter les valeurs négatives (sinon exponentiation complexe)
+    T_safe = max(0, float(T_at))
+
+    # éviter overflow si T_safe est trop grand
+    T_safe = min(T_safe, 10)  # cap à 10°C pour la sécurité numérique
+
+    damages = (
+        eta_1 * T_safe
+        + eta_2 * (T_safe ** 2)
+        + eta_3 * (T_safe ** 6)   # 6 au lieu de 6.754 : exponent entier
+    )
+
     nature["DamagesFunction"][t] = 1 - 1 / (1 + damages)
+
+
+
 
 def ksh_get(param_name, sid, ksh_sector_params):
     d = ksh_sector_params.get(param_name, {})
@@ -1211,28 +1463,71 @@ def allocate_shared_revenue_by_sector(t, sector_firms, shared_value, hysteresis)
 
     return allocated
 
-
 def plot_atmospheric_temperature(results_df):
     """
-    Trace l'évolution de la température atmosphérique
-    pour chaque scénario de politique.
+    Trace l'évolution de la température atmosphérique pour chaque scénario,
+    + p-value (comparaison entre scénarios sur la température moyenne par simulation).
     """
+    df = results_df.copy()
+
     plt.figure(figsize=(10, 6))
-    sns.lineplot(
-        data=results_df,
+    ax = sns.lineplot(
+        data=df,
         x="Period",
         y="AtmosphericTemperature",
         hue="ScenarioName",
         estimator="mean",
         ci="sd"
     )
-    plt.title("Évolution de la température atmosphérique selon les scénarios")
+
+    # p-value : température moyenne par simulation (sur tout l'horizon)
+    if "Simulation" in df.columns:
+        sim_avg = (df.groupby(["ScenarioName", "Simulation"], as_index=False)["AtmosphericTemperature"]
+                     .mean()
+                     .rename(columns={"AtmosphericTemperature": "Temp_sim_avg"}))
+        scenario_order = sorted(sim_avg["ScenarioName"].unique())
+        groups = [sim_avg[sim_avg["ScenarioName"] == s]["Temp_sim_avg"].dropna().values for s in scenario_order]
+        groups = [g for g in groups if len(g) > 1]
+        if len(groups) >= 2:
+            _, pval = kruskal(*groups)
+            _annotate_pvalue(ax, pval, label_prefix="Kruskal–Wallis (T° moyenne / simulation)")
+    else:
+        scenario_order = sorted(df["ScenarioName"].unique())
+        groups = [df[df["ScenarioName"] == s]["AtmosphericTemperature"].dropna().values for s in scenario_order]
+        groups = [g for g in groups if len(g) > 1]
+        if len(groups) >= 2:
+            _, pval = kruskal(*groups)
+            _annotate_pvalue(ax, pval, label_prefix="Kruskal–Wallis (T°, toutes obs.)")
+
+    plt.title("Évolution de la température atmosphérique selon les scénarios (±1σ)")
     plt.xlabel("Période")
     plt.ylabel("Température atmosphérique (°C)")
     plt.grid(True)
     plt.tight_layout()
     plt.show()
 
+    """
+    def plot_atmospheric_temperature(results_df):
+        
+        Trace l'évolution de la température atmosphérique
+        pour chaque scénario de politique.
+        
+        plt.figure(figsize=(10, 6))
+        sns.lineplot(
+            data=results_df,
+            x="Period",
+            y="AtmosphericTemperature",
+            hue="ScenarioName",
+            estimator="mean",
+            ci="sd"
+        )
+        plt.title("Évolution de la température atmosphérique selon les scénarios")
+        plt.xlabel("Période")
+        plt.ylabel("Température atmosphérique (°C)")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+    """
 
 def gini_coefficient(x):
     import numpy as np
@@ -1574,7 +1869,7 @@ def try_rebuy(hh, prev_firm_id, sector_id, firms, t, params):
     firm = next((f for f in firms
                  if f.get("FirmID") == prev_firm_id
                  and f.get("IdSector") == sector_id
-                 and (f.get("Dead", [0])[-1] if f.get("Dead") else 0) == 0), None)
+                 and safe_get(f.get("Dead", [1]), t, 1) == 1), None)
     if firm is None:
         return False
 
@@ -1597,6 +1892,124 @@ def try_rebuy(hh, prev_firm_id, sector_id, firms, t, params):
 
 # === PROCESSUS PURCHASE ===
 
+def _ensure_len(lst, n, fill=0.0):
+    """Ensure list length >= n by appending fill values."""
+    while len(lst) < n:
+        lst.append(fill)
+
+def choose_supplier_and_record_sale(
+    hh, sid, amount, firm_by_id, candidate_firm_ids, t,
+    rng=None,
+    price_key="Price", quality_key="Quality",
+    epsilon=1e-12,
+    prefer_green=False,
+    switching_cost=0.0,
+):
+    """
+    Chooses a supplier among candidates for sector `sid`, records supplier choice in hh["SupplierBySector"][sid][t],
+    and records sales into the chosen firm's Sales[t] (+ Sales_Prod1/Sales_Prod2).
+    
+    Returns: (chosen_firm_id, chosen_product_id) where product_id in {1,2}
+    """
+
+    # --- 0) Robust guards
+    if amount is None or amount <= epsilon:
+        # Still propagate previous supplier to keep time consistency
+        sup = hh.setdefault("SupplierBySector", {})
+        arr = sup.setdefault(sid, [])
+        _ensure_len(arr, t + 1, -1)
+        if t > 0 and arr[t] == -1:
+            prev = arr[t - 1] if len(arr) > t - 1 else -1
+            arr[t] = prev
+        return arr[t], None
+
+    # --- 1) Build candidate firm objects (canonical references)
+    candidates = []
+    for fid in candidate_firm_ids:
+        f = firm_by_id.get(fid)
+        if f is None:
+            continue
+        # "Dead" convention: in your logs Dead unique values [1] means 1=alive
+        if f.get("Dead", 1) != 1:
+            continue
+        candidates.append(f)
+
+    sup = hh.setdefault("SupplierBySector", {})
+    arr = sup.setdefault(sid, [])
+    _ensure_len(arr, t + 1, -1)
+    prev_supplier = arr[t - 1] if (t > 0 and len(arr) > t - 1) else -1
+
+    if not candidates:
+        # no candidates => keep previous
+        arr[t] = prev_supplier
+        return prev_supplier, None
+
+    # --- 2) Score candidates
+    # Default price/quality if missing
+    # (Lower price better; higher quality better)
+    # You can plug your own keys/logic here.
+    best_f = None
+    best_score = -1e30
+
+    for f in candidates:
+        price = float(f.get(price_key, 1.0))
+        qual  = float(f.get(quality_key, 1.0))
+
+        # Product mapping: your convention (TechId/Portfolio): 0 brown -> product 1, 1 mix -> product 2, 2 green -> product 2
+        tech = f.get("TechId", None)
+        if tech is None:
+            # fallback to Portfolio if TechId not used here
+            tech = f.get("Portfolio", [0])[-1] if isinstance(f.get("Portfolio", 0), list) else f.get("Portfolio", 0)
+        product_id = 2 if tech in (1, 2) else 1
+
+        green_bonus = 0.0
+        if prefer_green and product_id == 2:
+            green_bonus = 0.01  # tiny bias; tune if you want
+
+        # Switching cost: penalize changing supplier vs previous
+        sw_penalty = 0.0
+        if prev_supplier != -1 and f.get("FirmID") != prev_supplier:
+            sw_penalty = switching_cost
+
+        # Simple score (editable): quality/price plus (optional) green bonus minus switching penalty
+        score = (qual / max(price, epsilon)) + green_bonus - sw_penalty
+
+        if score > best_score:
+            best_score = score
+            best_f = f
+
+    chosen_firm_id = best_f.get("FirmID")
+    if chosen_firm_id is None:
+        arr[t] = prev_supplier
+        return prev_supplier, None
+
+    # --- 3) Write supplier choice
+    arr[t] = chosen_firm_id
+
+    # --- 4) Record sales into the canonical firm object
+    sales = best_f.setdefault("Sales", [])
+    _ensure_len(sales, t + 1, 0.0)
+    sales[t] += float(amount)
+
+    # Record by product
+    tech = best_f.get("TechId", None)
+    if tech is None:
+        tech = best_f.get("Portfolio", [0])[-1] if isinstance(best_f.get("Portfolio", 0), list) else best_f.get("Portfolio", 0)
+    chosen_product_id = 2 if tech in (1, 2) else 1
+
+    sales_p1 = best_f.setdefault("Sales_Prod1", [])
+    sales_p2 = best_f.setdefault("Sales_Prod2", [])
+    _ensure_len(sales_p1, t + 1, 0.0)
+    _ensure_len(sales_p2, t + 1, 0.0)
+
+    if chosen_product_id == 1:
+        sales_p1[t] += float(amount)
+    else:
+        sales_p2[t] += float(amount)
+
+    return chosen_firm_id, chosen_product_id
+
+
 def safe_get(lst, t, default=0):
     """Retourne lst[t] si possible, sinon la dernière valeur ou un défaut si liste vide."""
     return lst[t] if t < len(lst) else (lst[-1] if lst else default)
@@ -1605,7 +2018,7 @@ def safe_get(lst, t, default=0):
 def purchase_new(hh, sector_id, firms, t, params):
     """
     Sélectionne une nouvelle firme dans le secteur, en fonction des préférences du ménage.
-    Retourne l'IdFirm choisi ou None si aucun.
+    Retourne au FirmID choisi ou None si aucun.
     """
 
     # Préférences du ménage
@@ -1627,9 +2040,8 @@ def purchase_new(hh, sector_id, firms, t, params):
     candidate_firms = []
 
     for firm in firms:
-        if firm.get("IdSector", -1) != sector_id or safe_get(firm.get("Dead", [0]), t, 0) == 1:
+        if firm.get("IdSector", -1) != sector_id or safe_get(firm.get("Dead", [1]), t, 1) != 1:
             continue
-
         X = safe_get(firm.get("X", [0]), t, 0)
         price = safe_get(firm.get("Price", [1.0]), t, 1.0)
         tox = safe_get(firm.get("Tox", [1.0]), t, 1.0)
@@ -1666,8 +2078,7 @@ def purchase_new(hh, sector_id, firms, t, params):
         return None
 
     idx = draw_with_prob(utilities)
-    return candidate_firms[idx].get("IdFirm", None)
-
+    return candidate_firms[idx].get("FirmID", None)
 
 # === PROCESSUS GLOBAL PAR SECTEUR ===
 
@@ -1704,7 +2115,8 @@ def update_household_sector_choice(hh, sector_id, firms, t, params):
             firm["Sales"][t] += 1
 
             # choisir le produit actif (portfolio) pour créditer Sales_Prod
-            active_pid = 2 if (firm.get("Portfolio", [0])[-1] == 2) else 1
+            port = firm.get("Portfolio", [0])[-1]
+            active_pid = 2 if port in (1, 2) else 1
             if "Products" in firm:
                 for p in firm["Products"]:
                     if p.get("IdProduct") == active_pid:
@@ -1814,6 +2226,69 @@ def compute_sector_revenue_base(t, household_list):
             sector_revenue[s] += base_share + supp_share
 
     return sector_revenue
+
+
+def firm_adopted_t2_at_t(firm, t):
+    # 1) Source préférée : produit 2 (index 1) IsAdopted[t]
+    try:
+        p2 = firm.get("Products", [None, None])[1]
+        if p2 is not None:
+            ia = p2.get("IsAdopted", None)
+            if isinstance(ia, list) and t < len(ia):
+                return int(ia[t]) == 1
+    except Exception:
+        pass
+
+    # 2) Fallback : Portfolio[t] ∈ {1,2} => techno 2 utilisée / disponible
+    try:
+        port = firm.get("Portfolio", None)
+        if isinstance(port, list) and t < len(port):
+            return int(port[t]) in (1, 2)
+        elif isinstance(port, (int, float)):
+            return int(port) in (1, 2)
+    except Exception:
+        pass
+
+    return False
+
+def build_adoption_timeseries_from_runs(runs_by_scenario, num_periods=None):
+    """
+    runs_by_scenario: dict[str, list_of_runs]
+      Chaque run doit te donner accès à une liste de firmes, typiquement:
+        - run["firm_list"] ou run["firms"] ou run (si tu stockes direct la liste)
+    """
+    rows = []
+    for scen, runs in runs_by_scenario.items():
+        for r_i, run in enumerate(runs):
+            # récupérer la liste des firmes dans ce run
+            if isinstance(run, dict):
+                firm_list = run.get("firm_list", run.get("firms", None))
+            else:
+                firm_list = run  # si run est directement une liste de firmes
+
+            if firm_list is None:
+                raise ValueError(f"Impossible de trouver la liste des firmes pour scenario={scen}, run={r_i}")
+
+            # déterminer num_periods si non fourni
+            if num_periods is None:
+                # on essaie de déduire depuis la longueur de Portfolio d'une firme
+                guess = None
+                for f in firm_list:
+                    port = f.get("Portfolio", None)
+                    if isinstance(port, list) and len(port) > 0:
+                        guess = len(port)
+                        break
+                if guess is None:
+                    raise ValueError("Impossible de déduire num_periods (pas de Portfolio list trouvé).")
+                T = guess
+            else:
+                T = num_periods
+
+            for t in range(T):
+                adopted = [firm_adopted_t2_at_t(f, t) for f in firm_list]
+                share = float(np.mean(adopted)) if len(adopted) else np.nan
+                rows.append({"ScenarioName": scen, "Run": r_i, "Period": t, "AdoptionShare_T2": share})
+    return pd.DataFrame(rows)
 
 # =========================================================
 # B) Répartition sector_revenue → firmes + profits + ventes
@@ -1985,6 +2460,7 @@ def apply_sufficiency_module(t, sector_revenue, household_list,
 
     return sector_revenue_market
 
+
 # =========================================================
 # Module SOCIALISATION : split C marché ↔ G socialisé (scénarios)
 # =========================================================
@@ -1996,21 +2472,81 @@ def apply_socialization_module(t, sector_revenue_market,
         sector_revenue_after_social (dict), G_socialized_t (float)
     Si aucun scénario actif, renvoie l'entrée telle quelle et G=0.
     """
+
     sectors = ["Agriculture", "Energy", "Housing", "Transport", "Industry", "Technology"]
     PostGrowthActive = PostGrowthActive or []
     TransitionActive = TransitionActive or []
     pg_cons = pg_cons or {}
     admin_price_default = 0.5
 
-    is_pg = bool(PostGrowthActive[t]) if len(PostGrowthActive) > t else False
-    is_tm = bool(TransitionActive[t]) if len(TransitionActive) > t else False
-    if not is_pg and not is_tm:
-        # rien à faire
-        return dict(sector_revenue_market), 0.0
+    # Contexte global
+    scenario = globals().get("scenario_name", "")
+    social_cfg = globals().get("social", {}) or {}
+    ramp_periods = int(social_cfg.get("ramp_periods", 5))
+    deramp_periods = int(social_cfg.get("deramp_periods", ramp_periods))
 
+    # Indicateurs bruts
+    is_pg_raw = bool(PostGrowthActive[t]) if len(PostGrowthActive) > t else False
+    is_tm = bool(TransitionActive[t]) if len(TransitionActive) > t else False
+
+    def pg_strength_at_t(tt, active_list, ramp, deramp):
+        """
+        Force de la politique post-croissance à la date tt (0–1),
+        avec montée en régime (ramp) et deramp après la chute.
+        """
+        if not active_list or tt < 0:
+            return 0.0
+
+        # Cas 1 : gouvernement post-growth actif à tt → ramp-up
+        if active_list[tt] == 1:
+            k = 0
+            i = tt
+            while i >= 0 and active_list[i] == 1:
+                k += 1
+                i -= 1
+            return min(1.0, k / max(1, ramp))
+
+        # Cas 2 : plus actif, mais a été actif récemment → deramp
+        i0 = tt - 1
+        while i0 >= 0 and active_list[i0] == 0:
+            i0 -= 1
+
+        # Jamais actif avant → pas de socialisation
+        if i0 < 0:
+            return 0.0
+
+        # Force au moment de la dernière activation
+        k_on = 0
+        j = i0
+        while j >= 0 and active_list[j] == 1:
+            k_on += 1
+            j -= 1
+        s_last = min(1.0, k_on / max(1, ramp))
+
+        # Temps écoulé depuis la dernière période active
+        dt = tt - i0
+        if dt > deramp:
+            return 0.0
+
+        # Deramp linéaire vers 0
+        return max(0.0, s_last * (1.0 - dt / max(1, deramp)))
+
+    # Force de la politique post-growth à t (0–1)
+    strength_pg = 0.0
+    if scenario == "post_growth":
+        strength_pg = pg_strength_at_t(t, PostGrowthActive, ramp_periods, deramp_periods)
+        if strength_pg <= 0.0:
+            # Pas de socialisation si aucune activation passée ni deramp en cours
+            return dict(sector_revenue_market), 0.0
+    else:
+        # Scénarios sans post-growth structurel → logique ancienne
+        if not is_pg_raw and not is_tm:
+            return dict(sector_revenue_market), 0.0
+
+    # Parts "cibles" par secteur (quand la politique est à pleine puissance)
     social_share_pg = {
-        "Agriculture": 0.30, "Energy": 0.60, "Housing": 0.60,
-        "Transport": 0.60, "Industry": 0.00, "Technology": 0.00
+        "Agriculture": 1, "Energy": 1, "Housing": 1,
+        "Transport": 1, "Industry": 1, "Technology": 1
     }
     sector_id_by_name = {
         "Agriculture": 1, "Energy": 2, "Housing": 3,
@@ -2032,29 +2568,49 @@ def apply_socialization_module(t, sector_revenue_market,
 
     for sname in sectors:
         base_val = float(sector_revenue_market.get(sname, 0.0))
+
+        # Aucun chiffre d'affaires → rien à faire
         if base_val <= 0.0:
-            out[sname] = 0.0
+            out[sname] = base_val
             continue
 
         sid = sector_id_by_name[sname]
-        share_pg = social_share_pg.get(sname, 0.0)
-        share = share_pg if is_pg else (share_pg * float(soft_factor_tm))
+        base_share_pg = social_share_pg.get(sname, 0.0)
+
+        # Part socialisée effective selon le scénario
+        if scenario == "post_growth":
+            # En post-growth : force_pg fait varier la part socialisée
+            share = base_share_pg * strength_pg
+        else:
+            # Dans les autres scénarios : comportement ancien
+            share = base_share_pg if is_pg_raw else (base_share_pg * float(soft_factor_tm))
+
+        share = max(0.0, min(1.0, share))
         if share <= 0.0:
             out[sname] = base_val
             continue
 
-        admin_mult = max(0.0, get_admin(sid))
-        copay = max(0.0, min(1.0, get_copay(sid)))
+        admin_mult = get_admin(sid)
+        copay = get_copay(sid)
+        admin_mult = max(0.0, admin_mult)
+        copay = min(1.0, max(0.0, copay))
 
-        priv_keep = base_val * (1.0 - share)
-        social_val_admin = base_val * share * admin_mult
-        co_payment = copay * social_val_admin
-        subsidy    = (1.0 - copay) * social_val_admin
+        # Demande socialisée au prix de marché et au prix administré
+        socialized_market = base_val * share
+        socialized_admin  = socialized_market * admin_mult
 
-        out[sname] = max(0.0, priv_keep + co_payment)
-        G_socialized_t += max(0.0, subsidy)
+        # Dépense des ménages :
+        # - reste de marché au prix privé
+        # - ticket modérateur sur la partie socialisée (au prix admin)
+        private_val = base_val * (1.0 - share)
+        copay_val   = copay * socialized_admin
+        out[sname]  = private_val + copay_val
 
-    return out, float(G_socialized_t)
+        # Dépense publique = subvention = (1 - copay) * valeur socialisée au prix admin
+        subsidy = (1.0 - copay) * socialized_admin
+        G_socialized_t += subsidy
+
+    return out, G_socialized_t
 
 
 
@@ -2106,30 +2662,87 @@ def update_firm_budget_vectorized(firm_list, t, params):
         firm.setdefault("Budget", []).append(float(new_budget[i]))
         firm.setdefault("Dead", []).append(int(dead[i]))
 
+def apply_pending_tech_state(firm_list, t):
+    """
+    Convention: décision prise en fin de période t-1, appliquée au début de t.
+    - Portfolio est la variable d'état techno.
+    - Portfolio_next est la décision pending (par défaut = Portfolio courant).
+    - On synchronise Products[1]["IsAdopted"][t] avec Portfolio[t].
+    """
+    if t <= 0:
+        # À t=0, on ne "propage" pas de pending (il n'y a pas de t-1).
+        # Mais on peut quand même assurer que Products[1]["IsAdopted"] a bien une valeur à t=0
+        for f in firm_list:
+            if "Products" in f and len(f["Products"]) >= 2:
+                p2 = f["Products"][1]
+                p2.setdefault("IsAdopted", [])
+                while len(p2["IsAdopted"]) <= 0:
+                    p2["IsAdopted"].append(0)
+                # sync t=0 avec Portfolio[0] si dispo
+                port0 = f.get("Portfolio", [0])[0] if len(f.get("Portfolio", [])) > 0 else 0
+                p2["IsAdopted"][0] = 1 if int(port0) in (1, 2) else 0
+        return
+
+    for f in firm_list:
+        f.setdefault("Portfolio", [0])
+
+        # 1) Décision pending (prise à t-1). Si absente, on conserve l'état courant.
+        next_portfolio = f.get("Portfolio_next", f["Portfolio"][-1])
+
+        # 2) Appliquer l'état techno actif à t
+        f["Portfolio"].append(int(next_portfolio))
+
+        # 3) Synchroniser "IsAdopted" du produit 2 avec Portfolio[t]
+        if "Products" in f and len(f["Products"]) >= 2:
+            p2 = f["Products"][1]
+            p2.setdefault("IsAdopted", [])
+            while len(p2["IsAdopted"]) <= t:
+                p2["IsAdopted"].append(0)
+            p2["IsAdopted"][t] = 1 if f["Portfolio"][-1] in (1, 2) else 0
+
+        # 4) Important: on ne supprime PAS Portfolio_next ici.
+        # Il sera ré-écrit (ou laissé inchangé) en fin de période t par update_innovation_and_adoption.
+
 
 def update_innovation_and_adoption(firm_list, household_list, t, paramsinnov):
     """
     Met à jour parts de marché, adoption de la techno 2, R&D, innovation et régulation.
     Toutes les variables dynamiques sont stockées avec .append() pour conserver l’historique.
+
+    Convention pending:
+    - La décision d'adoption est prise en fin de période t (Portfolio_next)
+    - Elle est appliquée au début de t+1 via apply_pending_tech_state(...)
     """
+
+    # Petite fonction utilitaire: s'assure qu'une série a un slot à l'index t
+    def ensure_slot(series, t, default_val):
+        if series is None:
+            series = []
+        while len(series) <= t:
+            series.append(default_val if len(series) == 0 else series[-1])
+        return series
 
     # === 1. Parts de marché ===
     total_sales = sum(f["Sales"][t] if len(f["Sales"]) > t else 0 for f in firm_list)
+
     for firm in firm_list:
+        # ✅ PENDING PERSISTANT: par défaut, pas de changement à t+1
+        current_portfolio = firm["Portfolio"][-1]
+        firm["Portfolio_next"] = current_portfolio
+
         sales_t = firm["Sales"][t] if len(firm["Sales"]) > t else 0
         firm["MarketShare"] = sales_t / total_sales if total_sales > 0 else 0
 
-    # === 2. Adoption Produit 2 ===
+    # === 2. Adoption Produit 2 (décision -> Portfolio_next, effet t+1) ===
     for firm in firm_list:
         if firm["Dead"][-1] == 1:
             continue  # une firme morte ne peut plus adopter
 
+        # Série K
         if "K" not in firm:
-            firm["K"] = [0.1] * (t + 1)  # valeur initiale
-        elif len(firm["K"]) <= t:
-            firm["K"].append(firm["K"][-1])  # prolonge la série
+            firm["K"] = [0.1]
+        firm["K"] = ensure_slot(firm["K"], t, 0.1)
 
-        # Accès au portefeuille actuel
         portfolio = firm["Portfolio"][-1]
 
         if portfolio == 0:  # pas encore adopté P2
@@ -2137,31 +2750,39 @@ def update_innovation_and_adoption(firm_list, household_list, t, paramsinnov):
                 1 + paramsinnov["Alpha_Regu"] * t / (paramsinnov["Sunset_Date"] + paramsinnov["Revision_Period"])
             )
             K_value = safe_get(firm["K"], t, 0)
+
             if adoption_index > firm["AdoptionThreshold_MS"] and K_value > firm["AdoptionThreshold_K"]:
                 budget_t = firm["Budget"][t]
                 if budget_t >= firm["Switching_Costs"]:
-                    firm["Portfolio"].append(1)  # passage en P1+P2
+                    # ✅ Décision en fin de période t : effet à t+1
+                    firm["Portfolio_next"] = 1
                     firm["Switching_Period"] = t + 1
-                    # Initialisation techno 2 à l’adoption
-                    firm["X_P2"].append(paramsinnov["Product2_Init_X"])
-                    firm["Eff_P2"].append(paramsinnov["Product2_Init_Eff"])
-                    firm["Tox_P2"].append(paramsinnov["Product2_Init_Tox"])
-                    firm["Bio_P2"].append(paramsinnov["Product2_Init_Bio"])
+
+                    # On initialise P2 "au niveau t" (cohérent car décision prise à t),
+                    # mais l'usage économique de P2 sera actif à t+1 (via apply_pending_tech_state).
+                    firm["X_P2"]   = ensure_slot(firm.get("X_P2",   []), t, paramsinnov["Product2_Init_X"])
+                    firm["Eff_P2"] = ensure_slot(firm.get("Eff_P2", []), t, paramsinnov["Product2_Init_Eff"])
+                    firm["Tox_P2"] = ensure_slot(firm.get("Tox_P2", []), t, paramsinnov["Product2_Init_Tox"])
+                    firm["Bio_P2"] = ensure_slot(firm.get("Bio_P2", []), t, paramsinnov["Product2_Init_Bio"])
                 else:
-                    # pas assez de budget → pas d’adoption
-                    firm["X_P2"].append(firm["X_P2"][-1])
-                    firm["Eff_P2"].append(firm["Eff_P2"][-1])
-                    firm["Tox_P2"].append(firm["Tox_P2"][-1])
-                    firm["Bio_P2"].append(firm["Bio_P2"][-1])
+                    # pas assez de budget → pas d’adoption, on prolonge les séries si elles existent
+                    firm["X_P2"]   = ensure_slot(firm.get("X_P2",   [paramsinnov["Product2_Init_X"]]), t, firm.get("X_P2",   [paramsinnov["Product2_Init_X"]])[-1])
+                    firm["Eff_P2"] = ensure_slot(firm.get("Eff_P2", [paramsinnov["Product2_Init_Eff"]]), t, firm.get("Eff_P2", [paramsinnov["Product2_Init_Eff"]])[-1])
+                    firm["Tox_P2"] = ensure_slot(firm.get("Tox_P2", [paramsinnov["Product2_Init_Tox"]]), t, firm.get("Tox_P2", [paramsinnov["Product2_Init_Tox"]])[-1])
+                    firm["Bio_P2"] = ensure_slot(firm.get("Bio_P2", [paramsinnov["Product2_Init_Bio"]]), t, firm.get("Bio_P2", [paramsinnov["Product2_Init_Bio"]])[-1])
             else:
-                # pas encore adopté → on reporte les valeurs existantes
-                firm["X_P2"].append(firm["X_P2"][-1])
-                firm["Eff_P2"].append(firm["Eff_P2"][-1])
-                firm["Tox_P2"].append(firm["Tox_P2"][-1])
-                firm["Bio_P2"].append(firm["Bio_P2"][-1])
+                # pas encore adopté → on prolonge les valeurs existantes si elles existent
+                firm["X_P2"]   = ensure_slot(firm.get("X_P2",   [paramsinnov["Product2_Init_X"]]), t, firm.get("X_P2",   [paramsinnov["Product2_Init_X"]])[-1])
+                firm["Eff_P2"] = ensure_slot(firm.get("Eff_P2", [paramsinnov["Product2_Init_Eff"]]), t, firm.get("Eff_P2", [paramsinnov["Product2_Init_Eff"]])[-1])
+                firm["Tox_P2"] = ensure_slot(firm.get("Tox_P2", [paramsinnov["Product2_Init_Tox"]]), t, firm.get("Tox_P2", [paramsinnov["Product2_Init_Tox"]])[-1])
+                firm["Bio_P2"] = ensure_slot(firm.get("Bio_P2", [paramsinnov["Product2_Init_Bio"]]), t, firm.get("Bio_P2", [paramsinnov["Product2_Init_Bio"]])[-1])
 
     # === 3. Allocation du budget R&D ===
     for firm in firm_list:
+        firm["RD1"] = firm.get("RD1", [])
+        firm["RD2"] = firm.get("RD2", [])
+        firm["RD_Watch"] = firm.get("RD_Watch", [])
+
         if firm["Dead"][-1] == 1:
             firm["RD1"].append(0)
             firm["RD2"].append(0)
@@ -2170,7 +2791,6 @@ def update_innovation_and_adoption(firm_list, household_list, t, paramsinnov):
 
         budget_t = firm["Budget"][t]
         rd_total = paramsinnov["RDshare"] * budget_t
-
         portfolio = firm["Portfolio"][-1]
 
         if portfolio == 0:  # seulement P1
@@ -2197,67 +2817,54 @@ def update_innovation_and_adoption(firm_list, household_list, t, paramsinnov):
 
         portfolio = firm["Portfolio"][-1]
 
-        # Produit 1
+        # --- Produit 1 (écrit à l'index t, pas double-append) ---
         if portfolio in [0, 1]:
-            prob_innov = 1 - np.exp(-paramsinnov["scale"] * firm["RD1"][-1])
-            # X
-            if np.random.rand() < prob_innov:
-                firm["X_P1"].append(min(firm["X_P1"][-1] + paramsinnov["Alpha_X"], paramsinnov["Xmax_Prod1"]))
-            else:
-                firm["X_P1"].append(firm["X_P1"][-1])
-            # Eff
-            if np.random.rand() < prob_innov:
-                firm["Eff_P1"].append(min(firm["Eff_P1"][-1] + paramsinnov["Alpha_Eff"], paramsinnov["Effmax_Prod1"]))
-            else:
-                firm["Eff_P1"].append(firm["Eff_P1"][-1])
-            # Tox
-            if np.random.rand() < prob_innov:
-                firm["Tox_P1"].append(max(firm["Tox_P1"][-1] - paramsinnov["Alpha_Tox"], paramsinnov["Toxmin_Prod1"]))
-            else:
-                firm["Tox_P1"].append(firm["Tox_P1"][-1])
-            # Bio
-            if np.random.rand() < prob_innov:
-                firm["Bio_P1"].append(max(firm["Bio_P1"][-1] - paramsinnov["Alpha_Bio"], paramsinnov["Biomin_Prod1"]))
-            else:
-                firm["Bio_P1"].append(firm["Bio_P1"][-1])
+            firm["X_P1"]   = ensure_slot(firm.get("X_P1",   [paramsinnov["Product1_Init_X"]]), t, firm.get("X_P1",   [paramsinnov["Product1_Init_X"]])[-1])
+            firm["Eff_P1"] = ensure_slot(firm.get("Eff_P1", [paramsinnov["Product1_Init_Eff"]]), t, firm.get("Eff_P1", [paramsinnov["Product1_Init_Eff"]])[-1])
+            firm["Tox_P1"] = ensure_slot(firm.get("Tox_P1", [paramsinnov["Product1_Init_Tox"]]), t, firm.get("Tox_P1", [paramsinnov["Product1_Init_Tox"]])[-1])
+            firm["Bio_P1"] = ensure_slot(firm.get("Bio_P1", [paramsinnov["Product1_Init_Bio"]]), t, firm.get("Bio_P1", [paramsinnov["Product1_Init_Bio"]])[-1])
 
-        # Produit 2
+            prob_innov = 1 - np.exp(-paramsinnov["scale"] * firm["RD1"][-1])
+
+            if np.random.rand() < prob_innov:
+                firm["X_P1"][t] = min(firm["X_P1"][t] + paramsinnov["Alpha_X"], paramsinnov["Xmax_Prod1"])
+            if np.random.rand() < prob_innov:
+                firm["Eff_P1"][t] = min(firm["Eff_P1"][t] + paramsinnov["Alpha_Eff"], paramsinnov["Effmax_Prod1"])
+            if np.random.rand() < prob_innov:
+                firm["Tox_P1"][t] = max(firm["Tox_P1"][t] - paramsinnov["Alpha_Tox"], paramsinnov["Toxmin_Prod1"])
+            if np.random.rand() < prob_innov:
+                firm["Bio_P1"][t] = max(firm["Bio_P1"][t] - paramsinnov["Alpha_Bio"], paramsinnov["Biomin_Prod1"])
+
+        # --- Produit 2 (écrit à l'index t, pas double-append) ---
         if portfolio in [1, 2]:
+            firm["X_P2"]   = ensure_slot(firm.get("X_P2",   [paramsinnov["Product2_Init_X"]]), t, firm.get("X_P2",   [paramsinnov["Product2_Init_X"]])[-1])
+            firm["Eff_P2"] = ensure_slot(firm.get("Eff_P2", [paramsinnov["Product2_Init_Eff"]]), t, firm.get("Eff_P2", [paramsinnov["Product2_Init_Eff"]])[-1])
+            firm["Tox_P2"] = ensure_slot(firm.get("Tox_P2", [paramsinnov["Product2_Init_Tox"]]), t, firm.get("Tox_P2", [paramsinnov["Product2_Init_Tox"]])[-1])
+            firm["Bio_P2"] = ensure_slot(firm.get("Bio_P2", [paramsinnov["Product2_Init_Bio"]]), t, firm.get("Bio_P2", [paramsinnov["Product2_Init_Bio"]])[-1])
+
             prob_innov = 1 - np.exp(-paramsinnov["scale"] * firm["RD2"][-1])
-            # X
+
             if np.random.rand() < prob_innov:
-                firm["X_P2"].append(min(firm["X_P2"][-1] + paramsinnov["Alpha_X"], paramsinnov["Xmax_Prod2"]))
-            else:
-                firm["X_P2"].append(firm["X_P2"][-1])
-            # Eff
+                firm["X_P2"][t] = min(firm["X_P2"][t] + paramsinnov["Alpha_X"], paramsinnov["Xmax_Prod2"])
             if np.random.rand() < prob_innov:
-                firm["Eff_P2"].append(min(firm["Eff_P2"][-1] + paramsinnov["Alpha_Eff"], paramsinnov["Effmax_Prod2"]))
-            else:
-                firm["Eff_P2"].append(firm["Eff_P2"][-1])
-            # Tox
+                firm["Eff_P2"][t] = min(firm["Eff_P2"][t] + paramsinnov["Alpha_Eff"], paramsinnov["Effmax_Prod2"])
             if np.random.rand() < prob_innov:
-                firm["Tox_P2"].append(max(firm["Tox_P2"][-1] - paramsinnov["Alpha_Tox"], paramsinnov["Toxmin_Prod2"]))
-            else:
-                firm["Tox_P2"].append(firm["Tox_P2"][-1])
-            # Bio
+                firm["Tox_P2"][t] = max(firm["Tox_P2"][t] - paramsinnov["Alpha_Tox"], paramsinnov["Toxmin_Prod2"])
             if np.random.rand() < prob_innov:
-                firm["Bio_P2"].append(max(firm["Bio_P2"][-1] - paramsinnov["Alpha_Bio"], paramsinnov["Biomin_Prod2"]))
-            else:
-                firm["Bio_P2"].append(firm["Bio_P2"][-1])
+                firm["Bio_P2"][t] = max(firm["Bio_P2"][t] - paramsinnov["Alpha_Bio"], paramsinnov["Biomin_Prod2"])
 
     # === 5. Régulation (simplifiée) ===
     if t == paramsinnov["Sunset_Date"] + paramsinnov["Revision_Period"]:
-        eff_vals = [f["Eff_P2"][-1] for f in firm_list if f["Portfolio"][-1] > 0]
-        x_vals = [f["X_P2"][-1] for f in firm_list if f["Portfolio"][-1] > 0]
+        eff_vals = [f["Eff_P2"][t] for f in firm_list if f["Portfolio"][-1] > 0 and "Eff_P2" in f and len(f["Eff_P2"]) > t]
+        x_vals   = [f["X_P2"][t]   for f in firm_list if f["Portfolio"][-1] > 0 and "X_P2"   in f and len(f["X_P2"])   > t]
+
         if eff_vals and x_vals:
             avg_eff_p2 = np.mean(eff_vals)
             avg_x_p2 = np.mean(x_vals)
+
             if avg_eff_p2 >= paramsinnov["Target_Eff"] and avg_x_p2 >= paramsinnov["Target_X"]:
                 for firm in firm_list:
-                    if firm["Portfolio"][-1] == 0:
-                        firm["Dead"].append(1)
-                    else:
-                        firm["Dead"].append(0)
+                    firm["Dead"].append(1 if firm["Portfolio"][-1] == 0 else 0)
             else:
                 for firm in firm_list:
                     firm["Dead"].append(firm["Dead"][-1])
@@ -2279,6 +2886,8 @@ all_results = []
 
 # Simulation
 for sim in range(num_simulations):
+    # --- start of period t ---
+
     max_brown_credit = 1.0  # 100% de capacité initialement
     scenario_names = ["carbon_tax_only", "transition_mix", "post_growth"]
     scenario_name = scenario_names[sim % len(scenario_names)]
@@ -2344,7 +2953,8 @@ for sim in range(num_simulations):
             "CreditConstraintInt": [],
             "TotalCapital": [0.0],
             "GreenCapitalRatio": [],
-            "IdSector": sectors.index(sectors[i % len(sectors)]) + 1,
+            "IdSector": (i % 6) + 1,
+            #sectors.index(sectors[i % len(sectors)]) + 1,
             "SelectedChampions": 1 if random.random() < 0.2 else 0,  # 20% des firmes sont champions
             "Production": [0]*num_periods,
             # === Variables d’innovation ===
@@ -2402,6 +3012,10 @@ for sim in range(num_simulations):
 
         firm_list.append(firm)
 
+    firm_by_id = {f["FirmID"]: f for f in firm_list if "FirmID" in f}
+
+
+
     # === Init des champs liés au module "shared" (à placer juste après la création de firm_list) ===
     for f in firm_list:
         f.setdefault("AlphaShared", [])     # part de prod dédiée au shared (indicatif)
@@ -2454,16 +3068,14 @@ for sim in range(num_simulations):
 
     # Capital fixe total par secteur (en millions EUR)
     fixed_assets_sector = {
-        "Agriculture": 1785.78087,
-        "Energy":      2483.52562,
-        "Housing":     1616.43662,
-        "Transport":   4509.23822,
-        "Industry":    6911.55628,
-        "Technology":  2457.81971,
+        "Agriculture": 1785.78087 / 1,
+        "Energy":      2483.52562 / 1,
+        "Housing":     1616.43662 / 1,
+        "Transport":   4509.23822 / 1,
+        "Industry":    6911.55628 / 1,
+        "Technology":  2457.81971 / 1,
     }
 
-    # Part verte initiale : très faible dans la réalité (5 % par défaut)
-    INITIAL_GREEN_SHARE = 0.05
 
     # Amplitude du choc politique de groupe (Territoire × Skill) dans la décision de vote
     VOTE_GROUP_NOISE_SCALE = 0.8  # ajuste entre 0.2 et 1.0 selon la variabilité souhaitée
@@ -2572,6 +3184,10 @@ for sim in range(num_simulations):
 
 
     central_bank_rate = [0.02] * num_periods
+    # Policy rates dédiés aux prêts (tu peux laisser central_bank_rate inchangé)
+    cb_rate_green = [0.02] * num_periods
+    cb_rate_brown = [0.02] * num_periods
+
     bandwagon_effect = []
     TransitionActive = []
 
@@ -2630,6 +3246,19 @@ for sim in range(num_simulations):
     seeded_shared = False
 
     for t in range(num_periods):
+
+        # reset sales at t (important: reset BEFORE recording consumption)
+        for f in firm_list:
+            f.setdefault("Sales", [])
+            f.setdefault("Sales_Prod1", [])
+            f.setdefault("Sales_Prod2", [])
+            _ensure_len(f["Sales"], t + 1, 0.0)
+            _ensure_len(f["Sales_Prod1"], t + 1, 0.0)
+            _ensure_len(f["Sales_Prod2"], t + 1, 0.0)
+            f["Sales"][t] = 0.0
+            f["Sales_Prod1"][t] = 0.0
+            f["Sales_Prod2"][t] = 0.0
+
         # --- Mise à jour du salaire de base, selon scénario et politiques actives ---
         if t == 0:
             current_base_wage = base_wage_history[0]
@@ -2800,6 +3429,20 @@ for sim in range(num_simulations):
             if "Production" not in firm:
                 firm["Production"] = [0] * num_periods
             firm["Production"][t] = production
+
+            update_biophys_vars(nature, firm_list, t, params)
+
+            # --- Enregistrement des émissions agrégées ---
+            # TotalEmissions = UE, RestOfWorldEmissions = reste du monde,
+            # WorldEmissions = UE + reste du monde
+            emission_records.append({
+                "Simulation": sim,
+                "ScenarioName": scenario_name,
+                "Period": t,
+                "TotalEmissions": float(nature["TotalEmissions"][t]),           # UE
+                "RestOfWorldEmissions": float(nature["RestOfWorldEmissions"][t]),
+                "WorldEmissions": float(nature["WorldEmissions"][t]),
+            })
 
     # --- 2. Recalcul de la demande d'emplois ---
             green_ratio = firm.get("GreenCapitalRatio", [0])[t - 1] if t > 0 else 0.5
@@ -3033,8 +3676,8 @@ for sim in range(num_simulations):
             for key, value in {
                 "LoanInterestRate": random.uniform(0.01, 0.05),
                 "GreenLoanInterestRate": random.uniform(0.01, 0.05),
-                "AnimalSpirits_B": random.uniform(0, 0.01),
-                "AnimalSpirits_V": random.uniform(0, 0.01),
+                "AnimalSpirits_B": random.uniform(0.02, 0.03),
+                "AnimalSpirits_V": random.uniform(0.02, 0.03),
                 "gamma1": 0.01,
                 "gamma2": 0.01,
                 "gamma3": 0.01,
@@ -3125,7 +3768,7 @@ for sim in range(num_simulations):
                 - firm["gamma2"][t] * firm["LeverageFirm"][t]
                 + firm["gamma3"][t] * 0.7
                 - firm["gamma4"][t] * firm["LoanInterestRate"][t - 1]
-                - 0.001 * carbon_cost
+                - 0.0001 * carbon_cost
             )
 
             growth_v = max(0,
@@ -3142,9 +3785,22 @@ for sim in range(num_simulations):
             # --- Investissement désiré brut
             # === Bloc investissement corrigé ===
 
-            # --- Demandes désirées (issues de growth_b / growth_v déjà calculés)
-            brown_inv_des = max(0, growth_b * firm["BrownCapital"][t - 1])
-            green_inv_des = max(0, growth_v * firm["GreenCapital"][t - 1])
+            # --- Demandes désirées
+            if t == 1:
+                # ⚠️ Correction du pic : investissement minimal basé sur le capital initial
+                invest_rate = 0.003  # 1 %
+
+                prev_brown_cap = firm["BrownCapital"][t - 1] if len(firm["BrownCapital"]) > t - 1 else 0.0
+                prev_green_cap = firm["GreenCapital"][t - 1] if len(firm["GreenCapital"]) > t - 1 else 0.0
+
+                brown_inv_des = invest_rate * prev_brown_cap
+                green_inv_des = invest_rate * prev_green_cap
+
+            else:
+                # ⚙️ Pour toutes les autres périodes, on reprend la dynamique normale
+                brown_inv_des = max(0, growth_b * firm["BrownCapital"][t - 1])
+                green_inv_des = max(0, growth_v * firm["GreenCapital"][t - 1])
+
 
             # On stocke les investissements désirés
             firm["BrownInvDes"].append(brown_inv_des)
@@ -3175,11 +3831,26 @@ for sim in range(num_simulations):
 
             # --- Taux d’intérêt
             cb_rate = central_bank_rate[t]
+
+            # ================================
+            # Green monetary policy (TM only)
+            # ================================
+            is_tm = (scenario_name == "transition_mix")
+            ta_on = (safe_get(TransitionActive, t, 0) == 1)
+
+            if is_tm and ta_on:
+                cb_rate_green[t] = 0.00   # 0% sur green loans
+                cb_rate_brown[t] = 0.05   # 5% sur brown loans
+            else:
+                # par défaut : tu peux garder ton taux standard (ici 2%)
+                cb_rate_green[t] = 0.02
+                cb_rate_brown[t] = 0.02
+
             market_share = bank["MarketShareBank"][t]
             markup = 0.02 * market_share
 
-            firm["LoanInterestRate"][t] = cb_rate + markup + cc_final * 0.02
-            firm["GreenLoanInterestRate"][t] = firm["LoanInterestRate"][t] - 0.01
+            firm["LoanInterestRate"][t] = cb_rate_brown[t] + markup + cc_final * 0.02
+            firm["GreenLoanInterestRate"][t] = cb_rate_green[t] + markup + cc_final * 0.02
 
             # --- Application des contraintes
             brown_cap = brown_loan_cap[t]
@@ -3205,12 +3876,12 @@ for sim in range(num_simulations):
             prev_brown_cap = firm["BrownCapital"][t - 1]
 
             if PostGrowthActive[t] == 1:
-                updated_brown_cap = max(0, prev_brown_cap * 0.80 + brown_investment)
+                updated_brown_cap = max(0, prev_brown_cap * 0.95 * 0.80 + brown_investment)
             else:
-                updated_brown_cap = prev_brown_cap + brown_investment
+                updated_brown_cap = (prev_brown_cap * 0.95) + brown_investment
 
-            firm["BrownCapital"].append((updated_brown_cap) * 1)
-            firm["GreenCapital"].append((firm["GreenCapital"][t - 1]) * 1 + green_investment)
+            firm["BrownCapital"].append(updated_brown_cap)
+            firm["GreenCapital"].append((firm["GreenCapital"][t - 1]) * 0.95 + green_investment)
 
             firm["BrownLoans"].append(firm["BrownLoans"][t - 1] + brown_loans_granted)
             firm["GreenLoans"].append(firm["GreenLoans"][t - 1] + green_loans_granted)
@@ -3232,7 +3903,15 @@ for sim in range(num_simulations):
             """
            # À LA FIN DE CHAQUE FIRM, on peut calculer :
             bank = bank_list[firm["IdBank"]]
-#            if t < len(firm["BrownCapital"]):
+
+            _port = firm.get("Portfolio", [0])
+            if isinstance(_port, list) and len(_port) > t:
+                _port_t = _port[t]
+            elif isinstance(_port, list) and len(_port) > 0:
+                _port_t = _port[-1]
+            else:
+                _port_t = 0
+
             all_results.append({
                 "Simulation": sim,
                 "Period": t,
@@ -3251,6 +3930,8 @@ for sim in range(num_simulations):
                 "ScenarioName": scenario_name,
                 "Revenue": firm["Revenue"][t] if "Revenue" in firm and len(firm["Revenue"]) > t else 0.0,
                 "AtmosphericTemperature": nature["AtmosphericTemperature"][t] if t < len(nature["AtmosphericTemperature"]) else np.nan,
+                "Portfolio": _port_t,
+                "Tech2Adopted": 1 if _port_t in (1, 2) else 0,
             })
 
 
@@ -3258,8 +3939,20 @@ for sim in range(num_simulations):
         if t > 0:
             total_disp = sum(h["DisposableIncome"][t - 1] for h in household_list)
             mean_disp_income = total_disp / len(household_list)
+
+            # --- [NOUVEAU] Moyenne de NeedsIndex à t-1 (pour normaliser la satiété des besoins)
+            total_needs = 0.0
+            for h in household_list:
+                if "NeedsIndex" in h and len(h["NeedsIndex"]) > t - 1:
+                    total_needs += h["NeedsIndex"][t - 1]
+                else:
+                    # valeur de secours si jamais la liste est courte
+                    total_needs += h.get("NeedsIndex", [100.0])[0]
+            mean_needs_index = total_needs / len(household_list)
+
         else:
-            mean_disp_income = 1.0  # éviter division par zéro
+            mean_disp_income = 1.0      # éviter division par zéro
+            mean_needs_index = 100.0    # niveau de référence de satisfaction des besoins
 
 
         for household in household_list:
@@ -3272,20 +3965,15 @@ for sim in range(num_simulations):
                 household["BaseConsumption"].append(0)
                 household["Consumption"].append(0)
                 household["Savings"].append(household["Savings"][0])
-            """
-            household["w_needs_short"]     = random.uniform(0.1, 0.9)
-            household["w_needs_long"]     = random.uniform(0.1, 0.9)
-            household["w_bandwagon"] = random.uniform(0.1, 0.9)
-            household["w_inertia"]   = random.uniform(0.5, 1.0)  # on force une bonne inertie
-            household["w_holistic"]  = random.uniform(0.1, 0.9)
-            """
 
-            household["w_needs_short"]     = 0.02
-            household["w_needs_long"]     = 0.02
+
+            household["w_needs_short"] = 0.02
+            household["w_needs_long"]  = 0.02
             household["w_bandwagon"] = 0.01
-            household["w_inertia"]   = 0.01 # on force une bonne inertie
-            household["w_holistic"]  = 0.02
-
+            household["w_inertia"]   = 0.01 
+            household["w_holistic"]  = 0
+            household["VoteRaw"] = [0.0]
+            household["VoteProb"] = [0.5]
 
             status = household["Status"]
             employer_id = household["IdEmployer"]
@@ -3338,6 +4026,8 @@ for sim in range(num_simulations):
 
             # --- IMPACT DE LA TAXE CARBONE SUR LE REVENU DISPONIBLE DES MÉNAGES ---
             carbon_flag = 1 if (len(CarbonTaxActive) > t and CarbonTaxActive[t] == 1) else 0
+            carbon_cost_household = 0.0
+
             if carbon_flag == 1:
                 carbon_tax_rate = 0.1
                 carbon_cost_household = carbon_tax_rate * household["DisposableIncome"][t]
@@ -3346,10 +4036,16 @@ for sim in range(num_simulations):
                     household["DisposableIncome"][t] - carbon_cost_household
                 )
 
+            # On mémorise la taxe payée par le ménage à la période t
+            household.setdefault("CarbonTaxPaidHH", [])
+            while len(household["CarbonTaxPaidHH"]) <= t:
+                household["CarbonTaxPaidHH"].append(0.0)
+            household["CarbonTaxPaidHH"][t] = carbon_cost_household
+
             # Paramètres de la politique sociale post growth
-            RBU_amount = 0.18 * np.prod([(1 + general_inflation[i]) for i in range(t + 1)])
+            RBU_amount = 0.1 * np.prod([(1 + general_inflation[i]) for i in range(t + 1)])
             # RBU_amount = 1  # Revenu de base universel fixe par ménage et période
-            income_tax_threshold = 0.5  # Seuil de revenu à partir duquel la taxe s'applique
+            income_tax_threshold = 2 * np.prod([(1 + general_inflation[i]) for i in range(t + 1)])  # Seuil de revenu à partir duquel la taxe s'applique
             progressive_tax_rate = 0.15  # Taux d'imposition sur la part de revenu > threshold
 
             # Activation uniquement quand la politique post-growth est en vigueur politiquement
@@ -3368,7 +4064,7 @@ for sim in range(num_simulations):
                 # Revenu de base universel
                 dispo_final = dispo_after_tax + RBU_amount
                 household["DisposableIncome"][t] = dispo_final
-
+            """
             # Calcul du coefficient de Gini sur le revenu disponible des ménages à la période t
             disposable_incomes_t = [h["DisposableIncome"][t] for h in household_list]
             gini_t = gini_coefficient(disposable_incomes_t)
@@ -3380,6 +4076,64 @@ for sim in range(num_simulations):
                 "GiniDisposableIncome": gini_t,
                 "ScenarioName": scenario_name
             })
+            """
+
+        # ============================================================
+        #  REDISTRIBUTION PROGRESSIVE DES RECETTES DE TAXE CARBONE (transition_mix)
+        # ============================================================
+
+        if scenario_name == "transition_mix":
+            # 1) Recettes de taxe carbone payées par les firmes
+            total_carbon_tax_firms_t = 0.0
+            for f in firm_list:
+                carbon_list_f = f.get("CarbonTaxPaid", [])
+                if len(carbon_list_f) > t:
+                    total_carbon_tax_firms_t += float(carbon_list_f[t])
+
+            # 2) Recettes de taxe carbone payées par les ménages
+            total_carbon_tax_hh_t = 0.0
+            for h in household_list:
+                carbon_list_h = h.get("CarbonTaxPaidHH", [])
+                if len(carbon_list_h) > t:
+                    total_carbon_tax_hh_t += float(carbon_list_h[t])
+
+            total_carbon_tax_revenue_t = total_carbon_tax_firms_t + total_carbon_tax_hh_t
+
+            if total_carbon_tax_revenue_t > 0.0:
+                # Revenu de référence = revenu "Income", pas DisposableIncome
+                incomes_t = [max(0.0, h["Income"][t]) for h in household_list]
+                if len(incomes_t) > 0:
+                    mean_income_t = sum(incomes_t) / len(incomes_t)
+                else:
+                    mean_income_t = 0.0
+
+                # Facteur de "besoin" : plus le revenu est en dessous de la moyenne, plus le poids est élevé
+                need_factors = [max(0.0, mean_income_t - inc) for inc in incomes_t]
+                total_need = sum(need_factors)
+
+                if total_need <= 0.0:
+                    # Si tous les revenus sont identiques, redistribution uniforme
+                    rebate = total_carbon_tax_revenue_t / len(household_list)
+                    for h in household_list:
+                        h["DisposableIncome"][t] += rebate
+                else:
+                    # Redistribution 100 % progressive : tous les montants sont redistribués
+                    for h, need in zip(household_list, need_factors):
+                        share = total_carbon_tax_revenue_t * (need / total_need)
+                        h["DisposableIncome"][t] += share
+
+        # ============================================================
+        #  CALCUL DU GINI APRÈS REDISTRIBUTION
+        # ============================================================
+        disposable_incomes_t = [h["DisposableIncome"][t] for h in household_list]
+        gini_t = gini_coefficient(disposable_incomes_t)
+
+        gini_records.append({
+            "Simulation": sim,
+            "Period": t,
+            "GiniDisposableIncome": gini_t,
+            "ScenarioName": scenario_name
+        })
 
         # ============================================================
         #  INFLATION GÉNÉRALE AVEC EFFET TAXE CARBONE (MACRO)
@@ -3405,7 +4159,7 @@ for sim in range(num_simulations):
 
         # Sensibilité de l’inflation à la taxe carbone :
         # ex : si Taxe = 2 % du PIB et phi = 0.5 → +1 pt d’inflation
-        phi_inflation = 0.5
+        phi_inflation = 1
 
         extra_inflation_t = phi_inflation * carbon_tax_share_t * carbon_flag_t
 
@@ -3549,13 +4303,64 @@ for sim in range(num_simulations):
             disp_income = household["DisposableIncome"][t]
             savings_lag = household["Savings"][t - 1] if t > 0 else 0.0
             debt_lag    = household["HouseholdTotalDebt"][t - 1] if t > 0 else 0.0
-            ptc_di      = float(household["PropensityToConsumeDI"][0])
-            ptc_s       = float(household["PropensityToConsumeSavings"][0])
 
+            ptc_di_0 = float(household["PropensityToConsumeDI"][0])
+            ptc_s    = float(household["PropensityToConsumeSavings"][0])
+
+            # --- MPC "classique" par défaut ---
+            ptc_di_eff = ptc_di_0
+
+            # === RÈGLE DE SUFFISANCE UNIQUEMENT EN POST-GROWTH ===
+            if scenario_name == "post_growth" and t > 0:
+                # 1) Saturation des besoins : plus le NeedsIndex est élevé,
+                #    plus la MPC décroît (inspiration "consumption corridors")
+                needs_index_lag = household["NeedsIndex"][t - 1] if t - 1 < len(household["NeedsIndex"]) else 100.0
+                rel_needs = needs_index_lag / 100.0  # 1 ≈ niveau de base
+
+                if rel_needs > 1.0:
+                    # ex : si rel_needs = 2 et alpha = 1.2 → division MPC par (1 + 1.2)
+                    ptc_di_eff = ptc_di_0 / (1.0 + PG_NEEDS_ALPHA * (rel_needs - 1.0))
+                else:
+                    ptc_di_eff = ptc_di_0
+
+                # 2) Effet de durée de la politique post-growth :
+                #    plus elle est longtemps active, plus la MPC recule (normes de suffisance)
+                periods_pg = 0
+                tau = t
+                while tau >= 0 and safe_get(PostGrowthActive, tau, 0) == 1:
+                    periods_pg += 1
+                    tau -= 1
+
+                if periods_pg > 0:
+                    # tous les PG_TIME_STEP pas de temps, on réduit la MPC d'un "palier"
+                    pg_factor = max(0.4, 1.0 - PG_TIME_ALPHA * (periods_pg / PG_TIME_STEP))
+                    ptc_di_eff *= pg_factor
+
+                # 3) MPC bornée par un plancher (corridor supérieur de consommation privée)
+                ptc_di_eff = max(PG_MPC_FLOOR, min(ptc_di_eff, ptc_di_0))
+
+            # --- Surconsommation désirée avec MPC effective ---
             available = disp_income + savings_lag
 
-            supp_cons_desired   = max(0.0, ptc_di * (disp_income - base_c) + ptc_s * savings_lag)
+            # si disp_income <= base_c → pas de surconsommation, même en croissance
+            marginal_room = max(0.0, disp_income - base_c)
+            supp_cons_desired = max(0.0, ptc_di_eff * marginal_room + ptc_s * savings_lag)
             desired_consumption = base_c + supp_cons_desired
+
+            # --- CAP SUR LA CROISSANCE DE LA CONSOMMATION POUR ÉVITER LES BOSSES ---
+            # À partir de t >= 2 seulement, pour ne pas bloquer complètement le démarrage
+            if t >= 2 and len(household.get("Consumption", [])) >= t:
+                prev_cons = household["Consumption"][t - 1]
+                # Autorise au plus +25 % par période (à ajuster si tu veux)
+                max_growth = 0.05
+                # Si la conso précédente est très faible, on laisse filer pour éviter de tout bloquer
+                if prev_cons > 1e-6:
+                    cap = prev_cons * (1.0 + max_growth)
+                    if desired_consumption > cap:
+                        desired_consumption = cap
+                        # on recalcule la surconsommation désirée de façon cohérente
+                        supp_cons_desired = max(0.0, desired_consumption - base_c)
+
 
             if available >= desired_consumption:
                 consumption = desired_consumption
@@ -3624,12 +4429,102 @@ for sim in range(num_simulations):
 
 #            print(f"[t={t}] Conso totale: {total_conso:.2f} | Revenus firmes: {total_revenue:.2f}")
 
+            # ------------------------------------------------------------------
+            # (A) Références endogènes : trajectoire individuelle + norme sociale
+            # ------------------------------------------------------------------
+
+            needs_t = household["NeedsIndex"][t]
+            needs_ref0 = household["NeedsIndex"][0]  # baseline individuelle (t=0)
+
+            # Moyenne de la population à t (norme sociale) — calculée à la volée
+            # IMPORTANT: household_list doit être défini et NeedsIndex[t] déjà calculé pour tous
+            if "household_list" in locals() and household_list:
+                mean_needs_t = sum(h["NeedsIndex"][t] for h in household_list) / len(household_list)
+            else:
+                mean_needs_t = needs_t  # fallback neutre
+
+            # ------------------------------------------------------------------
+            # (B) Les 3 canaux (endogènes)
+            # ------------------------------------------------------------------
+
+            # 1) Trajectoire depuis t=0 (niveau relatif individuel)
+            needs_rel0 = needs_t - needs_ref0
+
+            # 2) Position relative (justice perçue) : écart à la norme sociale du moment
+            needs_pos = needs_t - mean_needs_t
+            w_needs_pos_loss = household.get("w_needs_pos_loss", 0.02)
+
+            # loss-only sur justice perçue : on amplifie seulement quand le ménage est en-dessous de la norme
+            needs_pos_loss_only = min(0.0, needs_pos)  # <= 0
+
+            # 3) Pertes/gains asymétriques : on ne garde que la partie négative (loss-only)
+            #    et on l'amplifie (loss aversion)
+            LOSS_AVERSION = household.get("loss_aversion", 1.5)  # ou fixe 2.0 si tu préfères
+            needs_loss_only = min(0.0, needs_rel0)               # <= 0
+
+            # ------------------------------------------------------------------
+            # (C) Pondérations (tu peux les définir au niveau ménage ou global)
+            # ------------------------------------------------------------------
+
+            # Si tu n'as pas encore ces poids, on fallback sur tes poids existants
+            w_needs_level = household.get("w_needs_level", household.get("w_needs_short", 0.02))
+            w_needs_pos   = household.get("w_needs_pos",   household.get("w_needs_long",  0.02))
+            w_needs_loss  = household.get("w_needs_loss",  0.02)
+
+            # Composantes existantes
+            w_bandwagon = household["w_bandwagon"]
+            w_inertia   = household["w_inertia"]
+            w_holistic  = household["w_holistic"]
+
+            bandwagon_prev = bandwagon_effect[t - 1]
+
+            # Inertie : (recommandé) inertie sur proba centrée plutôt que sur vote binaire
+            if "VoteProb" in household and (t - 1) < len(household["VoteProb"]):
+                inertia_term = household["VoteProb"][t - 1] - 0.5
+            else:
+                inertia_term = 0.0
+
+            # --- Effet holiste x = 1 - Gini - (BanksProfits/GDP) ---
+
+            # Gini courant (calculé plus haut dans la boucle sur t)
+            gini_for_vote = gini_t if "gini_t" in locals() else 0.0
+
+            # Profits bancaires sur PIB : on prend la période t-1 (les gens observent le passé)
+            if t <= 0:
+                banks_ratio = 0.0
+            else:
+                banks_ratio = get_banks_profits_to_gdp_ratio(t - 1)
+
+            x = random.uniform(0, 1) - gini_for_vote - banks_ratio
+
+            vote_raw = (
+                w_needs_level * needs_rel0
+                + w_needs_pos * needs_pos
+                + w_needs_pos_loss * LOSS_AVERSION * needs_pos_loss_only
+                + w_needs_loss * LOSS_AVERSION * needs_loss_only
+                + w_bandwagon * bandwagon_prev
+                + w_inertia   * inertia_term
+                + w_holistic  * x
+            )
+
+            # Passage par une logistique pour obtenir une probabilité entre 0 et 1
+            # avec le choc de groupe
+            vote_prob = 1.0 / (1.0 + math.exp(-(vote_raw)))
+            
+            household["VoteProb"].append(float(vote_prob))
+
+            # Décision finale
+            new_vote = 1 if random.random() < vote_prob else 0
+            #new_vote = 1 if 0.5 < vote_prob else 0
+            household["VoteDecision"].append(new_vote)
+
+
+            """
 
             # Mise à jour fictive du vote pour permettre le calcul de l’effet bandwagon
             # (À remplacer plus tard par une vraie règle comportementale)
             prev_vote = household["VoteDecision"][-1]
 
-            
             # --- DÉCISION DE VOTE ---
 
             needs_index = household["NeedsIndex"][t]
@@ -3657,18 +4552,6 @@ for sim in range(num_simulations):
             w_inertia   = household["w_inertia"]
             w_holistic  = household["w_holistic"]
 
-            # --- Effet holiste x = 1 - Gini - (BanksProfits/GDP) ---
-
-            # Gini courant (calculé plus haut dans la boucle sur t)
-            gini_for_vote = gini_t if "gini_t" in locals() else 0.0
-
-            # Profits bancaires sur PIB : on prend la période t-1 (les gens observent le passé)
-            if t <= 0:
-                banks_ratio = 0.0
-            else:
-                banks_ratio = get_banks_profits_to_gdp_ratio(t - 1)
-
-            x = random.uniform(0, 1) - gini_for_vote - banks_ratio
 
             # --- Calcul de la probabilité de voter pro-transition ---
 
@@ -3680,6 +4563,15 @@ for sim in range(num_simulations):
                 w_inertia     * vote_prev +
                 w_holistic    * x
             )
+
+            if "VoteRaw" not in household:
+                household["VoteRaw"] = [0.0]
+            if "VoteProb" not in household:
+                household["VoteProb"] = [0.5]
+
+            household["VoteRaw"].append(float(vote_raw))
+
+                       
             # --- Ajout du choc politique de groupe (Territoire × Skill) ---
 
             terr = household.get("IdTerritory", 1)
@@ -3689,20 +4581,15 @@ for sim in range(num_simulations):
 
             # Passage par une logistique pour obtenir une probabilité entre 0 et 1
             # avec le choc de groupe
-            vote_prob = 1.0 / (1.0 + math.exp(-(vote_raw + eps_group)))
+            vote_prob = 1.0 / (1.0 + math.exp(-(vote_raw)))
+            
+            household["VoteProb"].append(float(vote_prob))
 
             # Décision finale
             new_vote = 1 if random.random() < vote_prob else 0
+            #new_vote = 1 if 0.5 < vote_prob else 0
             household["VoteDecision"].append(new_vote)
-
-#        if t in [5, 10, 15, 20, 24]:
- #           print(f"SIM {sim} | T = {t} | SCÉNARIO = {scenario_name}")
-  #          print(f"→ Vote pro-transition : {sum(1 for h in household_list if h['VoteDecision'][t] == 1)}")
-   #         print(f"→ TransitionActive[t] = {TransitionActive[t]}")
-    #        print(f"→ CarbonTaxActive[t] = {CarbonTaxActive[t]}")
-     #       print(f"→ PostGrowthActive[t] = {PostGrowthActive[t]}")
-
-
+            """
 
         for h_id, h in enumerate(household_list):
             needsindex_records.append({
@@ -3712,6 +4599,32 @@ for sim in range(num_simulations):
                 "NeedsIndex": h["NeedsIndex"][t],
                 "ScenarioName": scenario_name
             })
+
+        # --- stockage micro au pas t (IMPORTANT: pas de boucle tt, pas de shadow de t) ---
+        for h_id, h in enumerate(household_list):
+
+            # VoteRaw
+            vr = h.get("VoteRaw", None)
+            if isinstance(vr, list) and t < len(vr):
+                vote_raw_records.append({
+                    "HouseholdID": h_id,
+                    "Period": t,
+                    "VoteRaw": float(vr[t]),
+                    "ScenarioName": scenario_name,
+                    "Simulation": sim,
+                })
+
+            # VoteProb
+            vp = h.get("VoteProb", None)
+            if isinstance(vp, list) and t < len(vp):
+                vote_prob_records.append({
+                    "HouseholdID": h_id,
+                    "Period": t,
+                    "VoteProb": float(vp[t]),
+                    "ScenarioName": scenario_name,
+                    "Simulation": sim,
+                })
+
 
 
         involuntary_unemployed = sum(1 for h in household_list if h["Status"] == 3 and h["IdEmployer"] == -1)
@@ -3763,6 +4676,18 @@ for sim in range(num_simulations):
             "EcologicalPolicyActive": policy_active
         })
 
+        # === Trace climat : émissions & CO2 par scénario / simu / période ===
+        climate_records.append({
+            "Simulation": sim,
+            "ScenarioName": scenario_name,
+            "Period": t,
+            "TotalEmissions": float(nature["TotalEmissions"][t]),
+            "IndustrialEmissions": float(nature["IndustrialEmissions"][t]),
+            "LandUseEmissions": float(nature["LandUseEmissions"][t]),
+            "AtmosphericCO2": float(nature["AtmosphericCO2Concentration"][t])
+        })
+
+
     # --- CALCUL DU PIB ---
 
     # 1. Consommation totale
@@ -3799,15 +4724,124 @@ for sim in range(num_simulations):
 
         # === Dépenses publiques (version sans capage, avec subventions vertes et UB liés aux salaires) ===
 
-        # Paramètres globaux (à définir en haut du script)
-        SUBSIDY_RATE_GREEN = 0.10    # ex: 20 % de co-financement public de l'investissement vert
 
-        # 1) Subventions vertes (flux, pas stock)
+        # 1) Investissement public vert ciblé sur la croissance du capital vert
+        # L'État vise +TARGET_GREEN_GROWTH de capital vert / an dans chaque secteur.
+
         public_green_investment = 0.0
-        if t > 0 and safe_get(TransitionActive, t-1, 0) == 1:
+
+        # --- Contrainte macro : budget vert = 5 % du PIB laggué ---
+        GDP_lag = 0.0
+        if t > 0 and len(gdp_records) >= t:
+            GDP_lag = float(gdp_records[t - 1].get("GDP", 0.0) or 0.0)
+
+        PUBLIC_GREEN_SHARE_GDP = 0.1
+        public_green_budget = PUBLIC_GREEN_SHARE_GDP * max(0.0, GDP_lag)
+
+        if t > 0 and safe_get(TransitionActive, t, 0) == 1 and public_green_budget > 0.0:
+
+            firms_by_sector_t = {}
             for f in firm_list:
-                gi_flux = safe_get(f.get("GreenInvestment", []), t-1, 0.0)
-                public_green_investment += SUBSIDY_RATE_GREEN * gi_flux
+                sec = f.get("IdSector", None)
+                if sec is None:
+                    continue
+                firms_by_sector_t.setdefault(sec, []).append(f)
+
+            # PARAMS
+            SEED_GREEN_SHARE_OF_TOTAL = 0.01
+            MIN_GREEN_BASE = 1e-9
+
+            for sec, fs in firms_by_sector_t.items():
+                if not fs or public_green_investment >= public_green_budget:
+                    continue
+
+                # Stocks à t-1
+                prev_green = 0.0
+                prev_total = 0.0
+                for f in fs:
+                    gc_prev = safe_get(f["GreenCapital"], t - 1, f["GreenCapital"][-1] if f["GreenCapital"] else 0.0)
+                    bc_prev = safe_get(f["BrownCapital"], t - 1, f["BrownCapital"][-1] if f["BrownCapital"] else 0.0)
+                    prev_green += gc_prev
+                    prev_total += (gc_prev + bc_prev)
+
+                # Stock vert à t (après investissement privé)
+                curr_green = sum(
+                    safe_get(f["GreenCapital"], t, f["GreenCapital"][-1] if f["GreenCapital"] else 0.0)
+                    for f in fs
+                )
+
+                # Cible
+                base_green = (
+                    prev_green
+                    if prev_green > MIN_GREEN_BASE
+                    else max(MIN_GREEN_BASE, SEED_GREEN_SHARE_OF_TOTAL * prev_total)
+                )
+                target_green = base_green * (1.0 + TARGET_GREEN_GROWTH)
+
+                gap = max(0.0, target_green - curr_green)
+
+                # --- Cap macro DUR : on ne dépasse jamais le budget 5 % PIB ---
+                gap = min(gap, public_green_budget - public_green_investment)
+                if gap <= 0.0:
+                    continue
+
+                # Allocation à 2 firmes
+                n_sel = min(2, len(fs))
+                selected = random.sample(fs, n_sel)
+                amount_per_firm = gap / n_sel
+
+                for f in selected:
+                    if "GreenCapital" not in f:
+                        f["GreenCapital"] = [0.0] * (t + 1)
+                    if len(f["GreenCapital"]) <= t:
+                        last_gc = f["GreenCapital"][-1] if f["GreenCapital"] else 0.0
+                        f["GreenCapital"].extend([last_gc] * (t + 1 - len(f["GreenCapital"])))
+
+                    f["GreenCapital"][t] += amount_per_firm
+
+                public_green_investment += gap
+
+        # --- Sécurité finale (parano, mais propre) ---
+        public_green_investment = min(public_green_investment, public_green_budget)
+
+        if scenario_name=="transition_mix" and t in [1,5,10]:
+            print(f"[t={t}] TA={safe_get(TransitionActive,t-1,0)} public_green_investment={public_green_investment:.2f}")
+
+        # === Recalibrer TotalCapital et GreenCapitalRatio après investissement public vert ===
+        # (et mettre en cohérence all_results déjà remplis)
+
+        # 1) Mettre à jour les séries des firmes
+        for firm in firm_list:
+            # On sécurise : on ne touche que si on a bien un capital défini à t
+            if t < len(firm["BrownCapital"]) and t < len(firm["GreenCapital"]):
+                total_capital_t = firm["BrownCapital"][t] + firm["GreenCapital"][t]
+
+                # Mise à jour de TotalCapital à l'indice t
+                if t < len(firm["TotalCapital"]):
+                    firm["TotalCapital"][t] = total_capital_t
+                else:
+                    firm["TotalCapital"].append(total_capital_t)
+
+                green_ratio_t = (
+                    firm["GreenCapital"][t] / total_capital_t
+                    if total_capital_t > 0 else 0.0
+                )
+
+                if t < len(firm["GreenCapitalRatio"]):
+                    firm["GreenCapitalRatio"][t] = green_ratio_t
+                else:
+                    firm["GreenCapitalRatio"].append(green_ratio_t)
+
+        # 2) Mettre à jour les enregistrements de all_results pour cette période et cette simulation
+        for entry in all_results:
+            if entry["Simulation"] == sim and entry["Period"] == t:
+                fid = entry["FirmID"]
+                firm = firm_list[fid]
+                # On remplace les valeurs "privées" par les valeurs "privé + public"
+                entry["GreenCapital"] = firm["GreenCapital"][t]
+                entry["TotalCapital"] = firm["TotalCapital"][t]
+                entry["GreenCapitalRatio"] = firm["GreenCapitalRatio"][t]
+
 
         # 2) Allocations chômage (proportion du dernier salaire ou salaire minimum)
         public_unemployment_benefits = 0.0
@@ -3838,7 +4872,7 @@ for sim in range(num_simulations):
                     p["Sales_Prod"].append(0)
                 p["Sales_Prod"][t] = 0
 
-
+        apply_pending_tech_state(firm_list, t)
 
         update_firm_prices_from_sector_lists(
             firm_list, t,
@@ -3846,23 +4880,49 @@ for sim in range(num_simulations):
             price_hous_list, price_trans_list,
             price_ind_list, price_tech_list
         )
-        
-        update_firm_characteristics_from_products(firm_list, t)
 
         update_household_consumption(household_list, firm_list, t, params, num_sectors=6)
 
+        update_firm_characteristics_from_products(firm_list, t)
+
         update_firm_budget_vectorized(firm_list, t, paramsinnov)
+
 
         firm_list = update_innovation_and_adoption(firm_list, household_list, t, paramsinnov)
 
+        if t < 10:
+            dead_vals = [ (f.get("Dead",[None])[-1] if isinstance(f.get("Dead",[None]), list) else f.get("Dead", None)) for f in firm_list ]
+            #print(f"[t={t}] DEBUG Dead unique values:", sorted(set(dead_vals)))
+            #print(f"[t={t}] DEBUG Portfolio unique values:", sorted(set(f.get('Portfolio',[None])[-1] for f in firm_list)))
+
+
+                #print(f"[t={t}] DEBUG candidates={len(cands)} | "
+                    #f"MSmax={max(ms):.4f} thrMS={thr_ms} | "
+                    #f"Kmax={max(K):.4f} thrK={thr_k} | "
+                    #f"BudgetMax={max(B):.2f} switch={swc}")
+
+
+        if t > 0:
+            new_adopters = sum(
+                1 for f in firm_list
+                if len(f.get("Portfolio", [])) > 1 and f["Portfolio"][-2] == 0 and f["Portfolio"][-1] in (1, 2)
+            )
+            print(f"[Période {t}] Nouvelles adoptions techno 2 = {new_adopters}")
+
+
         # === Debug : compter les changements de supplier ===
+
         changes = 0
         for hh in household_list:
-            if len(hh["FirmID"]) > 1:  # au moins deux périodes enregistrées
-                if hh["FirmID"][-1] != hh["FirmID"][-2]:  # si le supplier a changé
-                    changes += 1
-
-        print(f"Période {t} : {changes} ménages ont changé de supplier.")
+            changed = False
+            for sid in range(1, 7):
+                s = hh.get("SupplierBySector", {}).get(sid, [])
+                if t > 0 and len(s) > t and len(s) > (t-1) and s[t] != s[t-1]:
+                    changed = True
+                    break
+            if changed:
+                changes += 1
+        print(f"Période {t} : {changes} ménages ont changé de supplier (au moins un secteur).")
 
 
         print(
@@ -3907,16 +4967,6 @@ for sim in range(num_simulations):
             soft_factor_tm=0,  # ou 0.0 si tu veux aucune socialisation en Transition
         )
 
-        # === 4) Calcul des agrégats macroéconomiques ===
-        CTot_t = float(sum(sector_after_social.values()))  # conso de marché après socialisation
-        GTot_t = float(
-            public_green_investment
-            + public_unemployment_benefits
-            + public_guaranteed_jobs
-            + G_socialized_t
-        )
-        ITot_t = total_investment
-
         # --- Suivi explicite du G partagé ---
         G_shared_list[t] = G_socialized_t
 
@@ -3924,6 +4974,11 @@ for sim in range(num_simulations):
         g_shared_t = G_shared_list[t] if 'G_shared_list' in globals() and len(G_shared_list) > t else 0.0
         i_pub_shared_t = I_pub_shared_list[t] if 'I_pub_shared_list' in globals() and len(I_pub_shared_list) > t else 0.0
         total_public_spending_t = total_public_spending + g_shared_t + i_pub_shared_t
+
+        # === 4) Calcul des agrégats macroéconomiques ===
+        CTot_t = float(sum(sector_after_social.values()))  # conso de marché après socialisation
+        GTot_t = float(total_public_spending_t)
+        ITot_t = total_investment
 
         # Revenu agrégé des ménages (adapte "Income" si ta clé est différente)
         household_income_agg_t = 0.0
@@ -3973,6 +5028,10 @@ for sim in range(num_simulations):
             "G_shared": G_socialized_t,
         })
 
+
+        if scenario_name == "transition_mix":
+            print(f"[t={t}] public_green_investment={public_green_investment:.2f}")
+
         # === Enregistrement dette publique (mêmes clés que gdp_records : Period, Scenario) ===
         # On prend le PIB courant tel qu'il vient d'être calculé (cohérent avec gdp_records)
         gdp_current_t = CTot_t + GTot_t + ITot_t
@@ -3999,13 +5058,105 @@ for sim in range(num_simulations):
             "i_gov_pct": 100.0 * igov_t
         })
 
+        # === DataFrame climat à partir de climate_records ===
+        climate_df = pd.DataFrame(climate_records)
+
+        # Emissions moyennes par scénario / période (sur les simulations)
+        emissions_agg = (
+            climate_df
+            .groupby(["ScenarioName", "Period"], as_index=False)
+            [["TotalEmissions", "IndustrialEmissions", "LandUseEmissions", "AtmosphericCO2"]]
+            .mean()
+            .sort_values(["ScenarioName", "Period"])
+        )
+
+        # Option : sauvegarde CSV
+        emissions_agg.to_csv("emissions_by_scenario.csv", index=False)
+
 
         # === Construction finale de gdp_df ===
         gdp_df = pd.DataFrame(gdp_records)
 
+        # === Rescaling / calibration des agrégats pour fixer C, I, G ===
+        # Cibles en période 0 et 1 :
+        C_TARGET_0 = 120.0
+        I_TARGET_0 = 50.0
+        G_TARGET_0 = 40.0
+
+        C_TARGET_1 = 120.0
+        I_TARGET_1 = 50.0
+        G_TARGET_1 = 40.0
+
+        if not gdp_df.empty:
+            for scen in gdp_df["ScenarioName"].unique():
+                # --- Calage en période 1 : on garde le rescaling multiplicatif
+                mask_t1 = (gdp_df["ScenarioName"] == scen) & (gdp_df["Period"] == 1)
+                if mask_t1.any():
+                    row1 = gdp_df.loc[mask_t1].iloc[0]
+
+                    c1 = float(row1.get("CTot", 0.0) or 0.0)
+                    i1 = float(row1.get("ITot", 0.0) or 0.0)
+                    g1 = float(row1.get("GTot", 0.0) or 0.0)
+
+                    c_factor = C_TARGET_1 / c1 if c1 != 0.0 else 1.0
+                    i_factor = I_TARGET_1 / i1 if i1 != 0.0 else 1.0
+                    g_factor = G_TARGET_1 / g1 if g1 != 0.0 else 1.0
+
+                    scen_mask = (gdp_df["ScenarioName"] == scen)
+
+                    # Rescaling sur toutes les périodes de ce scénario
+                    gdp_df.loc[scen_mask, "CTot"] *= c_factor
+                    gdp_df.loc[scen_mask, "ITot"] *= i_factor
+                    gdp_df.loc[scen_mask, "GTot"] *= g_factor
+
+                # --- Calage direct en période 0 : on force les valeurs cibles
+                mask_t0 = (gdp_df["ScenarioName"] == scen) & (gdp_df["Period"] == 0)
+                if mask_t0.any():
+                    gdp_df.loc[mask_t0, "CTot"] = C_TARGET_0
+                    gdp_df.loc[mask_t0, "ITot"] = I_TARGET_0
+                    gdp_df.loc[mask_t0, "GTot"] = G_TARGET_0
+
+                # Recalcule le PIB cohérent avec les nouvelles valeurs pour tout le scénario
+                scen_mask = (gdp_df["ScenarioName"] == scen)
+                gdp_df.loc[scen_mask, "GDP"] = (
+                    gdp_df.loc[scen_mask, "CTot"]
+                    + gdp_df.loc[scen_mask, "ITot"]
+                    + gdp_df.loc[scen_mask, "GTot"]
+                    )
+
         # === Construction du DataFrame dette publique (même style que gdp_df) ===
         public_debt_df = pd.DataFrame(public_debt_records)
 
+        # Recalibrage cohérent de DebtToGDP_pct avec le nouveau PIB rescalé
+        if not public_debt_df.empty and not gdp_df.empty:
+            public_debt_df = public_debt_df.merge(
+                gdp_df[["ScenarioName", "Period", "GDP"]],
+                on=["ScenarioName", "Period"],
+                how="left"
+            )
+            public_debt_df["DebtToGDP_pct"] = np.where(
+                public_debt_df["GDP"] > 0,
+                100.0 * public_debt_df["PublicDebt"] / public_debt_df["GDP"],
+                0.0
+            )
+            # Optionnel: on peut drop la colonne GDP temporaire
+            # public_debt_df = public_debt_df.drop(columns=["GDP"])
+
+        # === Construction du DataFrame dette publique (même style que gdp_df) ===
+        public_debt_df = pd.DataFrame(public_debt_records)
+
+        # Recalibrage cohérent de DebtToGDP_pct avec le nouveau PIB rescalé
+        if not public_debt_df.empty and not gdp_df.empty:
+            public_debt_df = public_debt_df.merge(
+                gdp_df[["ScenarioName", "Period", "GDP"]],
+                on=["ScenarioName", "Period"],
+                how="left"
+            )
+            public_debt_df["DebtToGDP_pct"] = np.where(
+                public_debt_df["GDP"] > 0,
+                100.0 * public_debt_df["PublicDebt"] / public_debt_df["GDP"],
+                0.0
+            )
         # (Optionnel) filtrer t=0 dans les graphiques, comme pour le PIB
         public_debt_plot = public_debt_df[public_debt_df["Period"] > 0]
 
@@ -4033,10 +5184,13 @@ for sim in range(num_simulations):
         print(agg[["ScenarioName","Period","EcoPolicyActiveShare",
                 "GDP","GDP_growth_pct","CTot","ITot","GTot","G_shared"]]
             .to_string(index=False, justify="center"))
+        if scenario_name=="transition_mix" and safe_get(TransitionActive, t-1, 0)==1:
+            print("t",t,"public_green_investment", public_green_investment)
+   
+        if scenario_name=="transition_mix" and t==10:
+            print("n firms with IdSector:",
+                sum(1 for f in firm_list if f.get("IdSector") is not None))
 
-
-        update_biophys_vars(nature, firm_list, t, params)
-        
 
         # --- MISE À JOUR DES POLITIQUES PAR ÉLECTIONS (sans append) ---
         if t == 0:
@@ -4125,7 +5279,7 @@ for sim in range(num_simulations):
         })
 
 
-
+        
         # Création d'un DataFrame pour VoteDecision
         for h_id, h in enumerate(household_list):
             for t in range(1, num_periods):
@@ -4137,10 +5291,78 @@ for sim in range(num_simulations):
                         "ScenarioName": scenario_name,  # ajout
                         "Simulation": sim
                     })
-        
+
+        # --- after VoteDecision has been computed/updated for period t ---
+        if t in election_periods:
+            votes = []
+            missing = 0
+            for hh in household_list:
+                vd = hh.get("VoteDecision", None)
+                if isinstance(vd, list) and t < len(vd):
+                    votes.append(vd[t])
+                else:
+                    missing += 1
+
+            print(f"DEBUG election t={t} | votes collected={len(votes)} | missing households={missing}")
+
+            if len(votes) > 0:
+                election_records.append({
+                    "ScenarioName": current_scenario,
+                    "Simulation": int(sim),
+                    "Period": int(t),
+                    "VoteProTransition": float(np.mean(votes)),
+                    "N_households": int(len(votes)),
+                    "N_missing": int(missing),
+                })
+
+"""
+# À exécuter UNE FOIS À LA FIN de la simulation (après la boucle for t in range(num_periods))
+for h_id, h in enumerate(household_list):
+    for tt in range(1, num_periods):
+        if tt < len(h["VoteDecision"]):
+            vote_records.append({
+                "HouseholdID": h_id,
+                "Period": tt,
+                "VoteDecision": h["VoteDecision"][tt],
+                "ScenarioName": scenario_name,
+                "Simulation": sim
+            })
+"""
+
+plt.figure()
+for scen in sorted(emissions_agg["ScenarioName"].unique()):
+    sub = emissions_agg[emissions_agg["ScenarioName"] == scen]
+    plt.plot(sub["Period"], sub["TotalEmissions"], label=scen)
+
+plt.xlabel("Période")
+plt.ylabel("Emissions totales (flux)")
+plt.title("Emissions de CO₂ (TotalEmissions) par scénario")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+
 
 for h_id, h in enumerate(household_list):
     for t in range(1, num_periods):
+
+        # --- HarmoniousLiving micro : NeedsIndex / TotalEmissions (UE) ---
+        # Sécurisation des index et division par zéro
+        if t < len(h.get("NeedsIndex", [])):
+            needs_t = h["NeedsIndex"][t]
+        else:
+            needs_t = np.nan
+
+        if t < len(nature["TotalEmissions"]):
+            total_em_t = float(nature["TotalEmissions"][t])
+        else:
+            total_em_t = np.nan
+
+        if total_em_t is not None and total_em_t > 0:
+            harmonious_living_t = needs_t / total_em_t
+        else:
+            harmonious_living_t = np.nan
+
         household_records.append({
             "HouseholdID": h_id,
             "IdEmployer": h["IdEmployer"],
@@ -4152,9 +5374,41 @@ for h_id, h in enumerate(household_list):
             "Savings": h["Savings"][t],
             "Debt": h["HouseholdTotalDebt"][t],
             "VoteDecision": h["VoteDecision"][t],
-            "ScenarioName": current_scenario,  #  Ajout
-            "Simulation": sim                  #  Ajout
+            # nouvelle variable micro :
+            "HarmoniousLiving": harmonious_living_t,
+            "ScenarioName": current_scenario,
+            "Simulation": sim
         })
+
+
+df = pd.DataFrame(all_results)
+
+# Part de firmes adoptantes par (Scenario, Simulation, Period)
+adopt_sim = (
+    df.groupby(["ScenarioName", "Simulation", "Period"])["Tech2Adopted"]
+      .mean()
+      .reset_index(name="AdoptionShare_T2")
+)
+
+plt.figure()
+for scen in sorted(adopt_sim["ScenarioName"].unique()):
+    sub = adopt_sim[adopt_sim["ScenarioName"] == scen]
+    g = sub.groupby("Period")["AdoptionShare_T2"]
+
+    mean = g.mean()
+    lo = g.quantile(0.10)
+    hi = g.quantile(0.90)
+
+    plt.plot(mean.index, mean.values, label=scen)
+    plt.fill_between(mean.index, lo.values, hi.values, alpha=0.2)
+
+plt.xlabel("Période")
+plt.ylabel("Part de firmes (techno 2)")
+plt.title("Diffusion techno 2 par scénario (moyenne, bande 10–90% sur simulations)")
+plt.ylim(0, 1)
+plt.legend()
+plt.tight_layout()
+plt.show()
 
 gini_df = pd.DataFrame(gini_records)
 
@@ -4167,6 +5421,137 @@ plt.grid(True)
 plt.tight_layout()
 plt.show()
 
+vote_raw_df = pd.DataFrame(vote_raw_records)
+vote_prob_df = pd.DataFrame(vote_prob_records)
+
+
+# --- VoteRaw ---
+vote_raw_agg = (
+    vote_raw_df
+    .groupby(["ScenarioName", "Simulation", "Period"], as_index=False)
+    .agg(VoteRaw=("VoteRaw", "mean"))
+)
+
+vote_raw_summary = (
+    vote_raw_agg
+    .groupby(["ScenarioName", "Period"], as_index=False)
+    .agg(
+        Mean=("VoteRaw", "mean"),
+        Std=("VoteRaw", "std")
+    )
+)
+
+vote_raw_summary["Period"] = vote_raw_summary["Period"].astype(int)
+vote_raw_summary = vote_raw_summary.sort_values("Period")
+vote_raw_summary["Std"] = vote_raw_summary["Std"].fillna(0.0)
+
+# --- VoteProb ---
+vote_prob_agg = (
+    vote_prob_df
+    .groupby(["ScenarioName", "Simulation", "Period"], as_index=False)
+    .agg(VoteProb=("VoteProb", "mean"))
+)
+
+vote_prob_summary = (
+    vote_prob_agg
+    .groupby(["ScenarioName", "Period"], as_index=False)
+    .agg(
+        Mean=("VoteProb", "mean"),
+        Std=("VoteProb", "std")
+    )
+)
+
+vote_prob_summary["Period"] = vote_prob_summary["Period"].astype(int)
+vote_prob_summary = vote_prob_summary.sort_values("Period")
+vote_prob_summary["Std"] = vote_prob_summary["Std"].fillna(0.0)
+
+fig, ax1 = plt.subplots(figsize=(12, 6))
+ax2 = ax1.twinx()
+
+for scen in sorted(vote_raw_summary["ScenarioName"].unique()):
+
+    sub_raw = vote_raw_summary[vote_raw_summary["ScenarioName"] == scen]
+    sub_prob = vote_prob_summary[vote_prob_summary["ScenarioName"] == scen]
+
+    # --- VoteRaw (axe gauche) ---
+    x_raw = sub_raw["Period"].to_numpy(dtype=int)
+    y_raw = sub_raw["Mean"].to_numpy(dtype=float)
+    s_raw = sub_raw["Std"].to_numpy(dtype=float)
+
+    ax1.plot(x_raw, y_raw, linestyle="-", marker="o", label=f"VoteRaw – {scen}")
+    ax1.fill_between(x_raw, y_raw - s_raw, y_raw + s_raw, alpha=0.2)
+
+    # --- VoteProb (axe droit) ---
+    x_prob = sub_prob["Period"].to_numpy(dtype=int)
+    y_prob = sub_prob["Mean"].to_numpy(dtype=float)
+    s_prob = sub_prob["Std"].to_numpy(dtype=float)
+
+    ax2.plot(x_prob, y_prob, linestyle="--", marker="s", label=f"VoteProb – {scen}")
+    ax2.fill_between(x_prob, y_prob - s_prob, y_prob + s_prob, alpha=0.15)
+
+# Axes
+ax1.set_xlabel("Période")
+ax1.set_ylabel("VoteRaw (latent support)")
+ax2.set_ylabel("Vote probability")
+
+ax1.set_xlim(0, max(vote_raw_summary["Period"].max(), vote_prob_summary["Period"].max()))
+ax2.set_ylim(0, 1)
+
+ax2.axhline(0.5, linestyle=":", linewidth=1)
+
+ax1.grid(True)
+
+# Légende combinée
+lines1, labels1 = ax1.get_legend_handles_labels()
+lines2, labels2 = ax2.get_legend_handles_labels()
+ax1.legend(lines1 + lines2, labels1 + labels2, loc="best")
+
+plt.title("VoteRaw (latent) et VoteProb (observé) – double axe")
+plt.tight_layout()
+plt.show()
+
+
+# --- PIB : moyenne ± sd par scénario + p-value (sur GDP moyenne par simulation) ---
+plt.figure(figsize=(10, 6))
+filtered = gdp_df[gdp_df["ScenarioName"].isin(["carbon_tax_only", "transition_mix", "post_growth"])].copy()
+
+ax = sns.lineplot(
+    data=filtered,
+    x="Period", y="GDP",
+    hue="ScenarioName",
+    estimator="mean",
+    ci="sd"
+)
+
+# p-value sur "GDP moyenne par simulation" (moyenne temporelle)
+# (si Simulation n'existe pas dans gdp_df, on retombe sur moyenne simple)
+if "Simulation" in filtered.columns:
+    sim_avg = (filtered.groupby(["ScenarioName", "Simulation"], as_index=False)["GDP"]
+                      .mean()
+                      .rename(columns={"GDP": "GDP_sim_avg"}))
+    scenario_order = sorted(sim_avg["ScenarioName"].unique())
+    groups = [sim_avg[sim_avg["ScenarioName"] == s]["GDP_sim_avg"].dropna().values for s in scenario_order]
+    groups = [g for g in groups if len(g) > 1]
+    if len(groups) >= 2:
+        _, pval = kruskal(*groups)
+        _annotate_pvalue(ax, pval, label_prefix="Kruskal–Wallis (GDP moyenne / simulation)")
+else:
+    # fallback : comparaison sur toutes les observations (moins propre, mais évite crash)
+    scenario_order = sorted(filtered["ScenarioName"].unique())
+    groups = [filtered[filtered["ScenarioName"] == s]["GDP"].dropna().values for s in scenario_order]
+    groups = [g for g in groups if len(g) > 1]
+    if len(groups) >= 2:
+        _, pval = kruskal(*groups)
+        _annotate_pvalue(ax, pval, label_prefix="Kruskal–Wallis (GDP, toutes obs.)")
+
+plt.title("PIB moyen par scénario (±1σ)")
+plt.xlabel("Période")
+plt.ylabel("PIB agrégé")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+"""
 # --- Visualisation du PIB par scénario (avec écart-type) ---
 plt.figure(figsize=(10, 6))
 filtered = gdp_df[gdp_df["ScenarioName"].isin(["carbon_tax_only", "transition_mix", "post_growth"])]
@@ -4180,6 +5565,7 @@ plt.ylabel("PIB agrégé")
 plt.grid(True)
 plt.tight_layout()
 plt.show()
+"""
 
 # 1) Aperçu comparé par période/scénario (moyenne sur runs)
 print("\n=== PublicDebt (moyenne) par scénario/période ===")
@@ -4287,6 +5673,7 @@ plt.title("Évolution des caractéristiques du produit 2")
 plt.tight_layout()
 plt.show()
 
+
 household_df = pd.DataFrame(household_records)
 
 results_df = pd.DataFrame(all_results)
@@ -4299,15 +5686,968 @@ status_df = pd.DataFrame(status_share_records)
 
 needsindex_df = pd.DataFrame(needsindex_records)
 
+# 2. Boxplot du NeedsIndex à différentes périodes clés + p-values
+selected_periods = [5, 10, 15, 20, 24]
+plot_df = needsindex_df[needsindex_df["Period"].isin(selected_periods)].copy()
+
+plt.figure(figsize=(12, 6))
+ax = sns.boxplot(
+    data=plot_df,
+    x="Period",
+    y="NeedsIndex",
+    hue="ScenarioName"
+)
+
+# p-value par période (comparaison entre scénarios à cette période)
+ymax = plot_df["NeedsIndex"].max()
+ymin = plot_df["NeedsIndex"].min()
+yrange = (ymax - ymin) if np.isfinite(ymax - ymin) and (ymax - ymin) > 0 else 1.0
+y_annot = ymax + 0.08 * yrange
+
+periods_sorted = sorted(selected_periods)
+scenario_order = sorted(plot_df["ScenarioName"].unique())
+
+for i, per in enumerate(periods_sorted):
+    sub = plot_df[plot_df["Period"] == per]
+    groups = [sub[sub["ScenarioName"] == s]["NeedsIndex"].dropna().values for s in scenario_order]
+    groups = [g for g in groups if len(g) > 1]  # sécurité
+    if len(groups) >= 2:
+        _, pval = kruskal(*groups)
+        ax.text(i, y_annot, f"p={pval:.3g}\n{_pstars(pval)}", ha="center", va="bottom", fontsize=10)
+
+plt.title("Distribution du NeedsIndex (p-values par période)")
+plt.xlabel("Période")
+plt.ylabel("NeedsIndex")
+plt.grid(True, axis="y")
+plt.tight_layout()
+plt.show()
+
 
 vote_df = pd.DataFrame(vote_records)
 
+hl_stats = (
+    household_df
+    .groupby(["ScenarioName", "Period"], as_index=False)
+    ["HarmoniousLiving"]
+    .agg(MeanHL="mean", StdHL="std")
+)
 
+# (optionnel) petit plot
+plt.figure(figsize=(10, 6))
+for scen in sorted(hl_stats["ScenarioName"].unique()):
+    sub = hl_stats[hl_stats["ScenarioName"] == scen]
+    plt.plot(sub["Period"], sub["MeanHL"], label=scen)
+plt.xlabel("Période")
+plt.ylabel("HarmoniousLiving moyen")
+plt.title("HarmoniousLiving = NeedsIndex / TotalEmissions")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+"""
+
+PARFAIT MAIS PAS DE TEMPS
+
+from matplotlib.lines import Line2D
+
+# --- election periods ---
+try:
+    election_periods = ELECTIONS
+except NameError:
+    election_periods = [5, 10, 15, 20]
+
+# --- sanity checks ---
+required = {"ScenarioName", "Simulation", "Period", "VoteDecision"}
+missing = required - set(vote_df.columns)
+if missing:
+    raise RuntimeError(f"vote_df missing columns: {missing}")
+
+# keep only election periods
+df_elec = vote_df[vote_df["Period"].isin(election_periods)].copy()
+if df_elec.empty:
+    raise RuntimeError(
+        "No election-period rows found in vote_df. "
+        "Check election_periods and whether vote_records stores Period correctly."
+    )
+
+# pro-transition share per (scenario, simulation, election)
+vote_share = (
+    df_elec
+    .groupby(["ScenarioName", "Simulation", "Period"], as_index=False)["VoteDecision"]
+    .mean()
+    .rename(columns={"VoteDecision": "VoteProTransition"})
+)
+
+print("\n=== Election outcomes available by scenario (simulation×election points) ===")
+print(vote_share.groupby("ScenarioName").size().sort_values(ascending=False).to_string())
+
+# Prepare boxplot data: one distribution per scenario
+scenarios = sorted(vote_share["ScenarioName"].unique())
+data = [
+    vote_share.loc[vote_share["ScenarioName"] == s, "VoteProTransition"].to_numpy()
+    for s in scenarios
+]
+
+plt.figure(figsize=(11, 5))
+
+plt.boxplot(
+    data,
+    tick_labels=scenarios,   # Matplotlib 3.9+
+    showmeans=True,
+    showfliers=True,
+    widths=0.55,
+)
+
+# raw points (each dot = one election in one simulation)
+rng = np.random.default_rng(123)
+for i, arr in enumerate(data, start=1):
+    if len(arr) == 0:
+        continue
+    x = i + rng.normal(0, 0.06, size=len(arr))
+    plt.scatter(x, arr, s=18, alpha=0.6)
+
+# Legend (conceptual, not per-scenario)
+legend_elements = [
+    Line2D([0], [0], marker='o', linestyle='None',
+           label='Election outcome (simulation × election)', markersize=6, alpha=0.6),
+    Line2D([0], [0], color='orange', lw=2, label='Median'),
+    Line2D([0], [0], marker='^', linestyle='None',
+           label='Mean', markersize=7),
+]
+plt.legend(handles=legend_elements, loc="upper right", frameon=True)
+
+plt.ylim(0, 1)
+plt.ylabel("Pro-transition vote share (per election, per simulation)")
+plt.xlabel("Scenario")
+plt.title("Political performance by scenario\nDistribution of election outcomes")
+plt.grid(axis="y", alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+"""
+
+# --- election periods ---
+try:
+    election_periods = ELECTIONS
+except NameError:
+    election_periods = [5, 10, 15, 20]
+
+# --- checks on vote_df ---
+required = {"ScenarioName", "Simulation", "Period", "VoteDecision"}
+missing = required - set(vote_df.columns)
+if missing:
+    raise RuntimeError(f"vote_df missing columns: {missing}")
+
+# Keep only election periods
+df_elec = vote_df[vote_df["Period"].isin(election_periods)].copy()
+if df_elec.empty:
+    raise RuntimeError("No rows in vote_df at election_periods. Check Period coding and election_periods.")
+
+# Pro-transition share per (scenario, sim, election)
+vote_share = (
+    df_elec
+    .groupby(["ScenarioName", "Simulation", "Period"], as_index=False)["VoteDecision"]
+    .mean()
+    .rename(columns={"VoteDecision": "VoteProTransition"})
+)
+
+# Scenarios & periods available
+scenarios = ["carbon_tax_only", "transition_mix", "post_growth"]
+periods = sorted(vote_share["Period"].unique())
+
+print("\n=== N election outcomes (sim×election) by scenario ===")
+print(vote_share.groupby("ScenarioName").size().sort_values(ascending=False).to_string())
+print("\n=== N simulations per scenario (at elections) ===")
+print(vote_share.groupby("ScenarioName")["Simulation"].nunique().sort_values(ascending=False).to_string())
+
+def p_to_stars(p):
+    if p < 0.001:
+        return "***"
+    if p < 0.01:
+        return "**"
+    if p < 0.05:
+        return "*"
+    return "ns"
+
+# --- layout parameters ---
+n_s = len(scenarios)
+cluster_gap = 1.0
+cluster_width = n_s + cluster_gap
+
+# positions for each (period, scenario)
+pos = {}  # (period, scenario) -> x position
+xticks = []
+xtick_labels = []
+
+for j, per in enumerate(periods):
+    base = j * cluster_width
+    center = base + (n_s - 1) / 2
+    xticks.append(center)
+    xtick_labels.append(str(per))
+    for i, scen in enumerate(scenarios):
+        pos[(per, scen)] = base + i
+
+# Build data for boxplot (one list per box, in plotting order)
+box_data = []
+box_positions = []
+box_labels = []
+for per in periods:
+    for scen in scenarios:
+        arr = vote_share.loc[(vote_share["Period"] == per) & (vote_share["ScenarioName"] == scen),
+                             "VoteProTransition"].to_numpy()
+        box_data.append(arr)
+        box_positions.append(pos[(per, scen)])
+        box_labels.append(f"{scen}@{per}")
+
+# --- plot ---
+plt.figure(figsize=(12, 5))
+
+plt.boxplot(
+    box_data,
+    positions=box_positions,
+    widths=0.7,
+    showmeans=True,
+    showfliers=True,
+)
+
+from matplotlib.lines import Line2D
+
+# jitter points (each dot = one simulation outcome at that election)
+rng = np.random.default_rng(123)
+for per in periods:
+    for scen in scenarios:
+        arr = vote_share.loc[(vote_share["Period"] == per) & (vote_share["ScenarioName"] == scen),
+                             "VoteProTransition"].to_numpy()
+        if len(arr) == 0:
+            continue
+        x0 = pos[(per, scen)]
+        x = x0 + rng.normal(0, 0.06, size=len(arr))
+        plt.scatter(x, arr, s=18, alpha=0.6)
+
+# --- Kruskal–Wallis per election period + annotation ---
+for per in periods:
+    groups = []
+    group_sizes = []
+    for scen in scenarios:
+        arr = vote_share.loc[(vote_share["Period"] == per) & (vote_share["ScenarioName"] == scen),
+                             "VoteProTransition"].to_numpy()
+        groups.append(arr)
+        group_sizes.append(len(arr))
+
+    # Only test if at least 2 scenarios have data
+    nonempty = [g for g in groups if len(g) > 0]
+    if len(nonempty) < 2:
+        continue
+
+    # Kruskal–Wallis (note: with ~3 sims, interpret cautiously)
+    try:
+        stat, pval = kruskal(*nonempty)
+    except Exception:
+        # e.g., all values identical -> test not defined
+        pval = np.nan
+
+    # annotate above the max of that cluster
+    cluster_vals = vote_share.loc[vote_share["Period"] == per, "VoteProTransition"].to_numpy()
+    if len(cluster_vals) == 0:
+        continue
+
+    y_max = float(np.nanmax(cluster_vals))
+    y = min(0.98, y_max + 0.06)  # keep inside plot
+
+    center = xticks[periods.index(per)]
+    if np.isnan(pval):
+        txt = "KW: p = NA"
+    else:
+        txt = f"KW: p = {pval:.3g} {p_to_stars(pval)}"
+    plt.text(center, y, txt, ha="center", va="bottom", fontsize=9)
+
+# x-axis: election periods (temporal axis)
+plt.xticks(xticks, xtick_labels)
+plt.xlabel("Election period (model time)")
+plt.ylabel("Pro-transition vote share (per election, per simulation)")
+plt.ylim(0, 1)
+
+plt.title("Political performance over time\nElection outcomes by scenario (boxplots across simulations)")
+
+plt.grid(axis="y", alpha=0.3)
+
+# Legend: scenarios + conceptual markers
+# (We add invisible scatters to get distinct default colors without hardcoding.)
+for scen in scenarios:
+    plt.scatter([], [], label=scen)
+
+concept_legend = [
+    Line2D([0], [0], marker='o', linestyle='None', label='Simulation outcome', markersize=6, alpha=0.6),
+    Line2D([0], [0], color='orange', lw=2, label='Median'),
+    Line2D([0], [0], marker='^', linestyle='None', label='Mean', markersize=7),
+]
+leg1 = plt.legend(title="Scenario", loc="upper left", frameon=True)
+plt.gca().add_artist(leg1)
+plt.legend(handles=concept_legend, loc="upper right", frameon=True)
+
+plt.tight_layout()
+plt.show()
+
+# --- parameters ---
+last_election = max(election_periods)
+scenario_order = ["carbon_tax_only", "transition_mix", "post_growth"]
+scenarios = [s for s in scenario_order if s in vote_share["ScenarioName"].unique()]
+
+# --- determine reelection per simulation (last election) ---
+last_votes = vote_share[vote_share["Period"] == last_election].copy()
+last_votes["Reelected"] = (last_votes["VoteProTransition"] > 0.5)
+
+# --- Significance test across scenarios (last election) ---
+# Outcome is binary (Reelected ∈ {0,1}) → use contingency-table test (Chi²), not Kruskal–Wallis.
+from scipy.stats import chi2_contingency
+
+contingency = []  # rows=scenarios, cols=[reelected, not_reelected]
+for scen in scenarios:
+    sub = last_votes[last_votes["ScenarioName"] == scen]
+    n = int(sub["Simulation"].nunique())
+    k = int(sub["Reelected"].sum())
+    contingency.append([k, n - k])
+
+contingency = np.asarray(contingency, dtype=int)
+
+if contingency.shape[0] < 2 or np.any(contingency.sum(axis=1) == 0):
+    test_name = "Chi²"
+    pval_last = np.nan
+    test_note = "not applicable (missing data)"
+else:
+    # If all scenarios have identical outcomes (e.g., all reelected or all not reelected),
+    # the test is undefined / uninformative. We detect that and avoid misleading p-values.
+    # (Same column counts across scenarios => no variability to test.)
+    col_sums = contingency.sum(axis=0)
+    if col_sums[0] == 0 or col_sums[1] == 0:
+        # everyone is 0 or everyone is 1
+        test_name = "Chi²"
+        pval_last = np.nan
+        test_note = "not applicable (no variability: all outcomes identical)"
+    else:
+        chi2, pval_last, dof, exp = chi2_contingency(contingency)
+        test_name = "Chi²"
+        test_note = None
+
+# --- compute probabilities + Wilson CI ---
+from statsmodels.stats.proportion import proportion_confint
+
+records = []
+for scen in scenarios:
+    sub = last_votes[last_votes["ScenarioName"] == scen]
+    n = int(sub["Simulation"].nunique())
+    k = int(sub["Reelected"].sum())
+
+    p = k / n if n > 0 else np.nan
+
+    # binomial CI (Wilson)
+    if n > 0:
+        ci_low, ci_high = proportion_confint(k, n, method="wilson")
+    else:
+        ci_low, ci_high = np.nan, np.nan
+
+    records.append({
+        "Scenario": scen,
+        "ProbReelection": p,
+        "CI_low": ci_low,
+        "CI_high": ci_high,
+        "N_sim": n
+    })
+
+
+
+# --- agrégation propre ---
+vote_prob_agg = (
+    vote_prob_df
+    .groupby(["ScenarioName", "Simulation", "Period"], as_index=False)
+    .agg(VoteProb=("VoteProb", "mean"))
+)
+
+vote_prob_summary = (
+    vote_prob_agg
+    .groupby(["ScenarioName", "Period"], as_index=False)
+    .agg(
+        Mean=("VoteProb", "mean"),
+        Std=("VoteProb", "std")
+    )
+)
+
+# garde-fou périodes
+vote_prob_summary["Period"] = vote_prob_summary["Period"].astype(int)
+vote_prob_summary = vote_prob_summary.sort_values("Period")
+
+# --- plot ---
+plt.figure(figsize=(12, 6))
+
+for scen in sorted(vote_prob_summary["ScenarioName"].unique()):
+    sub = vote_prob_summary[vote_prob_summary["ScenarioName"] == scen]
+
+    x = sub["Period"].to_numpy(dtype=int)
+    y = sub["Mean"].to_numpy(dtype=float)
+    s = sub["Std"].fillna(0.0).to_numpy(dtype=float)
+
+    plt.plot(x, y, marker="o", label=scen)
+    plt.fill_between(x, y - s, y + s, alpha=0.2)
+
+plt.axhline(0.5, linestyle="--", linewidth=1)
+plt.xlabel("Période")
+plt.ylabel("Vote probability")
+plt.xlim(0, vote_prob_summary["Period"].max())
+plt.ylim(0, 1)
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+
+# --- agrégation ---
+vote_raw_agg = (
+    vote_raw_df
+    .groupby(["ScenarioName", "Simulation", "Period"], as_index=False)
+    .agg(VoteRaw=("VoteRaw", "mean"))
+)
+
+vote_raw_summary = (
+    vote_raw_agg
+    .groupby(["ScenarioName", "Period"], as_index=False)
+    .agg(
+        Mean=("VoteRaw", "mean"),
+        Std=("VoteRaw", "std")
+    )
+)
+
+# garde-fous
+vote_raw_summary["Period"] = vote_raw_summary["Period"].astype(int)
+vote_raw_summary = vote_raw_summary.sort_values("Period")
+
+# --- plot ---
+plt.figure(figsize=(12, 6))
+
+for scen in sorted(vote_raw_summary["ScenarioName"].unique()):
+    sub = vote_raw_summary[vote_raw_summary["ScenarioName"] == scen]
+
+    x = sub["Period"].to_numpy(dtype=int)
+    y = sub["Mean"].to_numpy(dtype=float)
+    s = sub["Std"].fillna(0.0).to_numpy(dtype=float)
+
+    plt.plot(x, y, marker="o", label=scen)
+    plt.fill_between(x, y - s, y + s, alpha=0.2)
+
+plt.xlabel("Période")
+plt.ylabel("VoteRaw")
+plt.xlim(0, vote_raw_summary["Period"].max())
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+reelect_df = pd.DataFrame(records)
+
+print("\n=== Reelection probability by scenario (last election) ===")
+print(reelect_df.to_string(index=False))
+
+# --- plot ---
+plt.figure(figsize=(7, 4))
+
+x = np.arange(len(reelect_df))
+plt.bar(
+    x,
+    reelect_df["ProbReelection"],
+    yerr=[
+        reelect_df["ProbReelection"] - reelect_df["CI_low"],
+        reelect_df["CI_high"] - reelect_df["ProbReelection"]
+    ],
+    capsize=5
+)
+
+plt.xticks(x, reelect_df["Scenario"])
+plt.ylim(0, 1)
+plt.ylabel("Probability of reelection")
+plt.title(
+    f"Probability of reelection of an ecological government\n"
+    f"(based on last election, {last_election})"
+)
+
+# annotate N
+for i, row in reelect_df.iterrows():
+    if not np.isnan(row["ProbReelection"]):
+        y_txt = min(0.98, row["ProbReelection"] + 0.03)
+    else:
+        y_txt = 0.03
+    plt.text(i, y_txt, f"N={int(row['N_sim'])}", ha="center", fontsize=9)
+
+# --- annotate significance test (Chi²) ---
+def p_to_stars(p):
+    if np.isnan(p):
+        return "NA"
+    if p < 0.001:
+        return "***"
+    if p < 0.01:
+        return "**"
+    if p < 0.05:
+        return "*"
+    return "n.s."
+
+ax = plt.gca()
+if np.isnan(pval_last):
+    msg = f"{test_name} test: {test_note}" if test_note else f"{test_name} test: not applicable"
+else:
+    msg = f"{test_name} test: p = {pval_last:.3g} {p_to_stars(pval_last)}"
+
+plt.text(
+    0.5, 0.95,
+    msg,
+    ha="center", va="top",
+    transform=ax.transAxes,
+    fontsize=10,
+    bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.9)
+)
+
+plt.tight_layout()
+plt.show()
+
+# --- checks ---
+required = {"ScenarioName", "Simulation", "Period", "VoteProTransition"}
+missing = required - set(vote_share.columns)
+if missing:
+    raise RuntimeError(f"vote_share missing columns: {missing}")
+
+# elections order
+periods = sorted(vote_share["Period"].unique())
+
+# scenario order (preferred x ordering)
+scenario_order = ["carbon_tax_only", "transition_mix", "post_growth"]
+present = list(vote_share["ScenarioName"].unique())
+scenarios = [s for s in scenario_order if s in present] + [s for s in sorted(present) if s not in scenario_order]
+
+# 1) win indicator at each election
+wins = vote_share.copy()
+wins["Win"] = (wins["VoteProTransition"] > 0.5).astype(int)
+
+# 2) wide table: scenario×sim → sequence of wins across election periods
+win_wide = (
+    wins
+    .pivot_table(index=["ScenarioName", "Simulation"], columns="Period", values="Win", aggfunc="max")
+    .reindex(columns=periods)
+)
+
+# 3) count transitions per simulation
+def count_transitions(row):
+    x = row.to_numpy(dtype=float)
+    x = x[~np.isnan(x)].astype(int)
+    if len(x) <= 1:
+        return pd.Series({"Reelections": 0, "Failures": 0, "ElectionsObserved": len(x)})
+
+    prev = x[:-1]
+    curr = x[1:]
+    reelections = int(np.sum((prev == 1) & (curr == 1)))  # 1 -> 1
+    failures    = int(np.sum((prev == 1) & (curr == 0)))  # 1 -> 0
+    return pd.Series({"Reelections": reelections, "Failures": failures, "ElectionsObserved": len(x)})
+
+metrics = win_wide.apply(count_transitions, axis=1).reset_index()
+
+print("\n=== Reelection dynamics once in power (per scenario) ===")
+print(metrics.groupby("ScenarioName")[["Reelections","Failures","ElectionsObserved"]].agg(["mean","std","min","max","count"]).to_string())
+
+# -------- helpers: CI + significance --------
+def bootstrap_ci_mean(values, n_boot=2000, ci=0.95, rng=None):
+    """Non-parametric bootstrap CI for the mean."""
+    arr = np.asarray(values, dtype=float)
+    arr = arr[~np.isnan(arr)]
+    if len(arr) == 0:
+        return (np.nan, np.nan, np.nan)
+    if rng is None:
+        rng = np.random.default_rng(123)
+    means = np.empty(n_boot)
+    n = len(arr)
+    for b in range(n_boot):
+        samp = rng.choice(arr, size=n, replace=True)
+        means[b] = np.mean(samp)
+    alpha = (1 - ci) / 2
+    lo = np.quantile(means, alpha)
+    hi = np.quantile(means, 1 - alpha)
+    return (np.mean(arr), lo, hi)
+
+def p_to_stars(p):
+    if np.isnan(p): return "NA"
+    if p < 0.001: return "***"
+    if p < 0.01:  return "**"
+    if p < 0.05:  return "*"
+    return "n.s."
+
+def kw_test(metrics_df, col, scenario_list):
+    groups = []
+    for s in scenario_list:
+        arr = metrics_df.loc[metrics_df["ScenarioName"] == s, col].to_numpy()
+        arr = arr[~np.isnan(arr)]
+        if len(arr) > 0:
+            groups.append(arr)
+    if len(groups) < 2:
+        return np.nan
+    try:
+        _, p = kruskal(*groups)
+        return float(p)
+    except Exception:
+        return np.nan
+
+# Compute KW p-values (one per row)
+p_re = kw_test(metrics, "Reelections", scenarios)
+p_fa = kw_test(metrics, "Failures", scenarios)
+
+# --- single plot: two rows (Reelections vs Failures) ---
+plt.close("all")
+fig, ax = plt.subplots(figsize=(9.8, 5.2))
+
+rng = np.random.default_rng(123)
+
+# y-row anchors
+y_anchor = {"Reelections": 1.0, "Failures": 0.0}
+row_labels = {1.0: "Reelections (1→1)", 0.0: "Failures (1→0)"}
+
+# Visual params
+jitter_x = 0.06
+jitter_y = 0.06
+ci_halfheight = 0.04  # visual thickness around each row
+
+# plot each scenario at x=i, with two stacked dot-clouds + mean ± CI bar
+for i, scen in enumerate(scenarios, start=1):
+    sub = metrics[metrics["ScenarioName"] == scen]
+    n = len(sub)
+
+    # ---------- Reelections ----------
+    yvals = sub["Reelections"].to_numpy(dtype=float)
+    x = i + rng.normal(0, jitter_x, size=n)
+    yj = y_anchor["Reelections"] + rng.normal(0, jitter_y, size=n)
+    ax.scatter(x, yj, s=28, alpha=0.65, edgecolor="black", linewidth=0.25)
+
+    mean_re, lo_re, hi_re = bootstrap_ci_mean(yvals, n_boot=2000, ci=0.95, rng=rng)
+
+    # diamond at the row (mean marker)
+    ax.scatter(i, y_anchor["Reelections"], s=110, marker="D", zorder=6)
+
+    # thin horizontal CI bar centered on the row
+    if not np.isnan(lo_re):
+        ax.hlines(y=y_anchor["Reelections"], xmin=i-0.18, xmax=i+0.18, linewidth=1.2, zorder=5)
+        # encode CI in the *label* (text) not in y-scale: CI is on mean-value scale,
+        # but this plot is a categorical row plot. So we show CI numerically.
+    ax.text(i, y_anchor["Reelections"] + 0.10, f"mean={mean_re:.2f}  [95% CI {lo_re:.2f},{hi_re:.2f}]",
+            ha="center", fontsize=8)
+
+    # ---------- Failures ----------
+    yvals = sub["Failures"].to_numpy(dtype=float)
+    x = i + rng.normal(0, jitter_x, size=n)
+    yj = y_anchor["Failures"] + rng.normal(0, jitter_y, size=n)
+    ax.scatter(x, yj, s=28, alpha=0.65, edgecolor="black", linewidth=0.25)
+
+    mean_fa, lo_fa, hi_fa = bootstrap_ci_mean(yvals, n_boot=2000, ci=0.95, rng=rng)
+
+    ax.scatter(i, y_anchor["Failures"], s=110, marker="D", zorder=6)
+
+    if not np.isnan(lo_fa):
+        ax.hlines(y=y_anchor["Failures"], xmin=i-0.18, xmax=i+0.18, linewidth=1.2, zorder=5)
+
+    ax.text(i, y_anchor["Failures"] - 0.16, f"mean={mean_fa:.2f}  [95% CI {lo_fa:.2f},{hi_fa:.2f}]",
+            ha="center", fontsize=8)
+
+    # N annotation
+    ax.text(i, 1.24, f"N={n}", ha="center", fontsize=9)
+
+# --- KW annotations (one per row) ---
+x_center = (1 + len(scenarios)) / 2
+ax.text(x_center, 1.30, f"KW (Reelections): p = {p_re:.3g} {p_to_stars(p_re)}",
+        ha="center", va="bottom", fontsize=9)
+ax.text(x_center, -0.30, f"KW (Failures): p = {p_fa:.3g} {p_to_stars(p_fa)}",
+        ha="center", va="top", fontsize=9)
+
+# Axes formatting
+ax.set_xticks(range(1, len(scenarios) + 1))
+ax.set_xticklabels(scenarios)
+ax.set_yticks([0.0, 1.0])
+ax.set_yticklabels([row_labels[0.0], row_labels[1.0]])
+
+ax.set_ylim(-0.35, 1.35)
+ax.set_xlabel("Scenario")
+ax.set_title(
+    "Political durability once in power\n"
+    "Dots = one simulation; Reelections count 1→1, Failures count 1→0 across election cycles"
+)
+
+ax.grid(axis="x", alpha=0.15)
+ax.grid(axis="y", alpha=0.20)
+
+# Legend (explicit and conceptual)
+legend_elements = [
+    Line2D([0], [0], marker='o', linestyle='None', label='Simulation outcome (one dot = one simulation)',
+           markersize=6, alpha=0.65, markeredgecolor="black", markeredgewidth=0.25),
+    Line2D([0], [0], marker='D', linestyle='None', label='Mean (diamond)', markersize=7),
+    Line2D([0], [0], linestyle='-', label='Mean reference line (row)', linewidth=1.2),
+]
+ax.legend(handles=legend_elements, loc="upper right", frameon=True)
+
+fig.tight_layout()
+plt.show()
+
+"""
+election_df = pd.DataFrame(election_records)
+
+# Prepare boxplot data: one distribution per scenario
+scenarios = sorted(election_df["ScenarioName"].unique())
+data = [election_df.loc[election_df["ScenarioName"] == s, "VoteProTransition"].to_numpy()
+        for s in scenarios]
+
+plt.figure(figsize=(11, 5))
+
+plt.boxplot(
+    data,
+    tick_labels=scenarios,   # (Matplotlib 3.9+)
+    showmeans=True,
+    showfliers=True,
+    widths=0.55,
+)
+
+# raw points (each dot = one election in one simulation)
+rng = np.random.default_rng(123)
+for i, arr in enumerate(data, start=1):
+    x = i + rng.normal(0, 0.05, size=len(arr))
+    plt.scatter(x, arr, s=16, alpha=0.6)
+
+legend_elements = [
+    Line2D([0], [0], marker='o', linestyle='None', color='C0',
+           label='Election outcome (simulation × election)', markersize=6, alpha=0.6),
+    Line2D([0], [0], color='orange', lw=2, label='Median'),
+    Line2D([0], [0], marker='^', linestyle='None', color='green',
+           label='Mean', markersize=7),
+]
+plt.legend(handles=legend_elements, loc="upper right", frameon=True)
+
+plt.ylim(0, 1)
+plt.ylabel("Pro-transition vote share")
+plt.xlabel("Scenario")
+plt.title(
+    "Political performance by scenario\n"
+    "Distribution of election outcomes (across election cycles and simulations)"
+)
+plt.grid(axis="y", alpha=0.3)
+plt.tight_layout()
+plt.show()
+"""
 
 plot_gdp_components(gdp_df)
 
+# === Emissions : DataFrame + taux de croissance ===
+emissions_df = pd.DataFrame(emission_records)
+
+# --- Stats par scénario / période : moyenne + écart-type des émissions ---
+emissions_stats = (
+    emissions_df
+    .groupby(["ScenarioName", "Period"], as_index=False)
+    .agg(
+        EmissionsMean=("TotalEmissions", "mean"),
+        EmissionsStd=("TotalEmissions", "std")
+    )
+    .fillna({"EmissionsStd": 0.0})
+)
+
+# --- Filtre : commencer à la période 2 ---
+emissions_stats = emissions_stats[emissions_stats["Period"] >= 2].copy()
+
+# --- Plot moyenne + aire ±1σ ---
+plt.figure()
+
+for scen in sorted(emissions_stats["ScenarioName"].unique()):
+    sub = emissions_stats[emissions_stats["ScenarioName"] == scen].sort_values("Period")
+
+    x = sub["Period"].to_numpy()
+    mu = sub["EmissionsMean"].to_numpy()
+    sd = sub["EmissionsStd"].to_numpy()
+
+    # Courbe moyenne
+    plt.plot(x, mu, label=scen)
+
+    # Aire ±1 écart-type (bornée à 0 pour éviter des valeurs négatives)
+    lower = np.maximum(mu - sd, 0.0)
+    upper = mu + sd
+    plt.fill_between(x, lower, upper, alpha=0.2)
+
+plt.xlabel("Période")
+plt.ylabel("Emissions totales (flux)")
+plt.title("Emissions de CO₂ (TotalEmissions) par scénario (moyenne ± 1σ)")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# === Nouveau plot : Emissions UE vs reste du monde vs monde ===
+if not emissions_df.empty:
+    # Moyenne par scénario / période pour les trois séries
+    region_cols = ["TotalEmissions", "RestOfWorldEmissions", "WorldEmissions"]
+    region_stats = (
+        emissions_df
+        .groupby(["ScenarioName", "Period"], as_index=False)[region_cols]
+        .mean()
+        .sort_values(["ScenarioName", "Period"])
+    )
+
+    # Passage au format long pour seaborn
+    em_long = region_stats.melt(
+        id_vars=["ScenarioName", "Period"],
+        value_vars=region_cols,
+        var_name="Region",
+        value_name="Emissions"
+    )
+
+    region_labels = {
+        "TotalEmissions": "EU (total)",
+        "RestOfWorldEmissions": "Rest of world",
+        "WorldEmissions": "World total",
+    }
+    em_long["Region"] = em_long["Region"].map(region_labels)
+
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(
+        data=em_long,
+        x="Period",
+        y="Emissions",
+        hue="Region",          # UE / RoW / World
+        style="ScenarioName",  # style de ligne par scénario
+    )
+    plt.title("CO₂ emissions: EU, rest of world, and world total")
+    plt.xlabel("Période")
+    plt.ylabel("Emissions (Gt CO₂)")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
+if not emissions_df.empty:
+    # tri pour un pct_change propre
+    emissions_df = emissions_df.sort_values(["ScenarioName", "Simulation", "Period"])
+
+
+
+
+    # Taux de croissance des émissions (en %), par sim et scénario
+    emissions_df["EmissionsGrowthPct"] = (
+        emissions_df
+        .groupby(["ScenarioName", "Simulation"])["TotalEmissions"]
+        .pct_change()
+        .replace([np.inf, -np.inf], np.nan)
+        .fillna(0.0) * 100.0
+    )
+
+    # Optionnel : petit contrôle agrégé
+    # em_agg = (emissions_df
+    #     .groupby(["ScenarioName", "Period"], as_index=False)
+    #     .agg(EmissionsTot=("TotalEmissions", "mean"),
+    #          EmissionsGrowthPct=("EmissionsGrowthPct", "mean"))
+    # )
+    # print(em_agg.to_string(index=False))
+
+    # Plot croissance des émissions (moyenne + sd par scénario)
+
+
 plot_atmospheric_temperature(results_df)
 
+emissions_sim_df = pd.DataFrame(emission_records)
+
+# --- checks ---
+required = {"Simulation", "ScenarioName", "Period", "TotalEmissions"}
+missing = required - set(emissions_sim_df.columns)
+if missing:
+    raise RuntimeError(f"emissions_sim_df missing columns: {missing}")
+
+# cumulative EU emissions per (scenario, simulation)
+cum_em = (
+    emissions_sim_df
+    .groupby(["ScenarioName", "Simulation"], as_index=False)["TotalEmissions"]
+    .sum()
+    .rename(columns={"TotalEmissions": "CumTotalEmissions"})
+)
+
+print("\n=== Cumulated emissions per scenario (summary) ===")
+print(cum_em.groupby("ScenarioName")["CumTotalEmissions"].describe())
+
+
+# preferred order
+scenario_order = ["carbon_tax_only", "transition_mix", "post_growth"]
+present = list(cum_em["ScenarioName"].unique())
+scenarios = [s for s in scenario_order if s in present] + \
+            [s for s in sorted(present) if s not in scenario_order]
+
+# data for boxplot and test
+data = [
+    cum_em.loc[cum_em["ScenarioName"] == s, "CumTotalEmissions"].to_numpy()
+    for s in scenarios
+]
+
+nonempty = [arr for arr in data if len(arr) > 0]
+stat, pval = kruskal(*nonempty) if len(nonempty) >= 2 else (np.nan, np.nan)
+
+def p_to_stars(p):
+    if np.isnan(p): return "NA"
+    if p < 0.001: return "***"
+    if p < 0.01:  return "**"
+    if p < 0.05:  return "*"
+    return "n.s."
+
+# --- plot ---
+plt.close("all")
+plt.figure(figsize=(9, 4.8))
+
+plt.boxplot(
+    data,
+    tick_labels=scenarios,
+    showmeans=True,
+    showfliers=True,
+    widths=0.55,
+)
+
+# jitter simulation points
+rng = np.random.default_rng(123)
+for i, arr in enumerate(data, start=1):
+    x = i + rng.normal(0, 0.06, size=len(arr))
+    plt.scatter(x, arr, s=18, alpha=0.6)
+
+plt.ylabel("Cumulative CO₂ emissions (EU, sum over periods)")
+plt.xlabel("Scenario")
+plt.title("Cumulative CO₂ emissions by scenario (across simulations)")
+
+plt.text(
+    0.02, 0.98,
+    f"Kruskal–Wallis: p = {pval:.3g} {p_to_stars(pval)}",
+    transform=plt.gca().transAxes,
+    ha="left", va="top"
+)
+
+plt.grid(axis="y", alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+
+# jitter raw points (each dot = one simulation)
+rng = np.random.default_rng(123)
+for i, arr in enumerate(data, start=1):
+    if len(arr) == 0:
+        continue
+    x = i + rng.normal(0, 0.06, size=len(arr))
+    plt.scatter(x, arr, s=18, alpha=0.6)
+
+plt.ylabel("Cumulative CO₂ emissions (sum over periods)")
+plt.xlabel("Scenario")
+plt.title("Cumulative CO₂ emissions by scenario (across simulations)")
+
+# annotate KW p-value
+if not np.isnan(pval):
+    plt.text(
+        0.02, 0.98,
+        f"Kruskal–Wallis: p = {pval:.3g} {p_to_stars(pval)}",
+        transform=plt.gca().transAxes,
+        ha="left", va="top"
+    )
+
+plt.grid(axis="y", alpha=0.3)
+plt.tight_layout()
+plt.show()
 
 
 max_period = household_df["Period"].max()
@@ -4547,6 +6887,35 @@ policy_count_df = (
     .reset_index()
 )
 
+# === EcoPolicyActiveShare : proportion de runs où la politique est active ===
+eco_share_df = (
+    policy_df.groupby(["ScenarioName", "Period"], as_index=False)["EcologicalPolicyActive"]
+    .mean()
+    .rename(columns={"EcologicalPolicyActive": "EcoPolicyActiveShare"})
+)
+
+# Optionnel : ne garder que les trois scénarios principaux
+eco_share_df = eco_share_df[
+    eco_share_df["ScenarioName"].isin(["carbon_tax_only", "transition_mix", "post_growth"])
+]
+
+# === Plot EcoPolicyActiveShare par scénario et période ===
+plt.figure(figsize=(10, 6))
+sns.lineplot(
+    data=eco_share_df,
+    x="Period",
+    y="EcoPolicyActiveShare",
+    hue="ScenarioName",
+    marker="o"
+)
+plt.title("Part des simulations avec politique écologique active\n(EcoPolicyActiveShare) par scénario")
+plt.xlabel("Période")
+plt.ylabel("Part des simulations (0–1)")
+plt.ylim(0, 1)
+plt.grid(True, axis="y")
+plt.tight_layout()
+plt.show()
+
 # 2. Ajouter le scénario associé à chaque ménage
 household_scenario_map = household_df[["HouseholdID", "ScenarioName"]].drop_duplicates()
 needsindex_df_full = needsindex_df.merge(household_scenario_map, on="HouseholdID")
@@ -4637,6 +7006,7 @@ plt.grid(True)
 plt.tight_layout()
 plt.show()
 
+"""
 # 2. Boxplot du NeedsIndex à différentes périodes clés
 selected_periods = [5, 10, 15, 20, 24]
 
@@ -4653,6 +7023,8 @@ plt.ylabel("NeedsIndex")
 plt.grid(True)
 plt.tight_layout()
 plt.show()
+
+"""
 
 plt.figure(figsize=(10, 6))
 sns.lineplot(data=social_cost_df, x="Period", y="UnemploymentRate", hue="ScenarioName", estimator="mean", ci="sd")
